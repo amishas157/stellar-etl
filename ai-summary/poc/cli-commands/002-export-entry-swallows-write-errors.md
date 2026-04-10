@@ -84,3 +84,106 @@ The downstream consequences are:
   3. Call `ExportEntry(output, brokenFile, nil)`
   4. Observe the returned error
 - **Assertion**: Assert that `ExportEntry` returns a non-nil error when `outFile.Write` or `outFile.WriteString` fails. Currently it returns nil, confirming the bug. A secondary assertion: verify that when the first `json.Marshal` fails, the function returns an error rather than writing a near-empty JSON object.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: cmd/data_integrity_poc_test.go
+**Test Name**: "TestExportEntrySwallowsWriteErrors"
+**Test Language**: Go
+
+### Demonstration
+
+The test creates a broken `*os.File` (the read end of an `os.Pipe()` after closing the write end) and passes it to `ExportEntry` with a valid `LedgerOutput`. The `outFile.Write` call fails with "bad file descriptor", which `ExportEntry` logs but does not propagate — it returns `(0, nil)`. The test confirms the bug by asserting that `exportErr == nil`, which holds true, proving that write failures are silently swallowed and callers count them as successful exports. A second test confirms the same behavior with a closed file handle.
+
+### Test Body
+
+```go
+package cmd
+
+import (
+	"os"
+	"testing"
+
+	"github.com/stellar/stellar-etl/v2/internal/transform"
+)
+
+// TestExportEntrySwallowsWriteErrors demonstrates that ExportEntry returns nil
+// when outFile.Write fails, causing callers to count the failed write as a success.
+func TestExportEntrySwallowsWriteErrors(t *testing.T) {
+	// Create a pipe and close the write end. The read end is not writable,
+	// so outFile.Write will fail when ExportEntry tries to write to it.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() failed: %v", err)
+	}
+	defer r.Close()
+	w.Close()
+
+	// Use a valid transform output that marshals successfully
+	entry := transform.LedgerOutput{
+		Sequence: 100,
+	}
+
+	// Call ExportEntry with the broken (read-end) file descriptor.
+	// outFile.Write will error because r is not writable.
+	numBytes, exportErr := ExportEntry(entry, r, nil)
+
+	// BUG DEMONSTRATION: ExportEntry returns nil even though the write failed.
+	// A correct implementation would return a non-nil error here.
+	if exportErr == nil {
+		t.Errorf("ExportEntry returned nil error on write failure — write error was silently swallowed. numBytes=%d", numBytes)
+	} else {
+		t.Logf("ExportEntry correctly returned error: %v", exportErr)
+	}
+}
+
+// TestExportEntrySwallowsNewlineWriteError demonstrates that ExportEntry returns
+// nil when the newline WriteString fails after a successful data write.
+func TestExportEntrySwallowsNewlineWriteError(t *testing.T) {
+	// Create a temp file, write to it, then close it to make subsequent writes fail
+	tmpFile, err := os.CreateTemp("", "poc-test-*")
+	if err != nil {
+		t.Fatalf("CreateTemp failed: %v", err)
+	}
+	tmpName := tmpFile.Name()
+	defer os.Remove(tmpName)
+
+	// Close the file so that writes will fail
+	tmpFile.Close()
+
+	entry := transform.LedgerOutput{
+		Sequence: 200,
+	}
+
+	// Call ExportEntry with the closed file
+	numBytes, exportErr := ExportEntry(entry, tmpFile, nil)
+
+	// BUG DEMONSTRATION: ExportEntry returns nil even though the write failed.
+	if exportErr == nil {
+		t.Errorf("ExportEntry returned nil error on closed file write — error was silently swallowed. numBytes=%d", numBytes)
+	} else {
+		t.Logf("ExportEntry correctly returned error: %v", exportErr)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestExportEntrySwallowsWriteErrors
+level=error msg="Error writing {Sequence:100 ...} to file: write |0: bad file descriptor"
+level=error msg="Error writing new line to file |0: write |0: bad file descriptor"
+    data_integrity_poc_test.go:34: ExportEntry returned nil error on write failure — write error was silently swallowed. numBytes=0
+--- FAIL: TestExportEntrySwallowsWriteErrors (0.00s)
+=== RUN   TestExportEntrySwallowsNewlineWriteError
+level=error msg="Error writing {Sequence:200 ...} to file: write .../poc-test-*: file already closed"
+level=error msg="Error writing new line to file .../poc-test-*: write .../poc-test-*: file already closed"
+    data_integrity_poc_test.go:63: ExportEntry returned nil error on closed file write — error was silently swallowed. numBytes=0
+--- FAIL: TestExportEntrySwallowsNewlineWriteError (0.00s)
+FAIL
+```
