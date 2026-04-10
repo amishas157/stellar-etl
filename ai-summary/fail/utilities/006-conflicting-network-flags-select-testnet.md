@@ -150,3 +150,32 @@ func TestConflictingNetworkFlagsSilentlySelectTestnet(t *testing.T) {
 PASS
 ok  	github.com/stellar/stellar-etl/v2/internal/utils	0.792s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-10
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Does the PoC actually exercise the claimed issue?** Yes. The test calls `GetEnvironmentDetails(CommonFlagValues{IsTest: true, IsFuture: true})` and reaches the `if commonFlags.IsTest { ... } else if commonFlags.IsFuture { ... }` branch in `internal/utils/main.go:886-904`, proving testnet wins when both flags are set.
+2. **Are the preconditions realistic?** Partially. A user can pass both CLI flags, but this requires an explicitly conflicting invocation rather than a normal export path.
+3. **Is the behavior a bug or by design?** By design. The README documents the exact precedence rule: “Adding both flags will default to testnet. Each stellar-etl command can only run from one network at a time.” (`README.md:141-143`). The implementation in `GetEnvironmentDetails` matches that documented contract.
+4. **Does the impact match the claimed severity?** No security or data-integrity severity applies because the observed output is the documented network-selection result, not corrupted export data.
+5. **Is the finding in scope?** The code path is real, but it does not demonstrate silent data corruption under the project framing; it demonstrates documented CLI precedence for an invalid/ambiguous flag combination.
+6. **Is the test itself correct?** Yes. The test is simple and directly verifies the precedence behavior.
+7. **Can the results be explained without the claimed issue?** Yes. The result is fully explained by documented testnet-over-futurenet precedence, so the PoC does not establish a bug.
+8. **Is this finding novel?** Irrelevant once the behavior is rejected as intended/documented.
+
+### Rejection Reason
+
+The PoC reproduces documented behavior, not a defect. `GetEnvironmentDetails` deterministically prefers testnet when both flags are set, and the README explicitly tells operators that this combination defaults to testnet.
+
+### Failed Checks
+
+- 3. Bug vs by-design
+- 7. Alternative explanation

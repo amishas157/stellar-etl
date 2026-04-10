@@ -73,3 +73,89 @@ Impact: Any downstream system consuming Parquet contract event data (e.g., BigQu
 - **Setup**: Use the existing test fixtures that produce `ContractEventOutput` with a non-zero `OperationID` (the tests in `contract_events_test.go` already create operation-scoped events)
 - **Steps**: Call `TransformContractEvent()` on a transaction with operation-scoped events, then call `.ToParquet()` on the resulting `ContractEventOutput` that has a non-zero `OperationID`
 - **Assertion**: Assert that the returned `ContractEventOutputParquet` has `OperationID` equal to the expected TOID value (not zero). Currently this will fail, confirming the bug. The fix is to add `OperationID: ceo.OperationID.Int64,` to the struct literal in `ToParquet()`.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestContractEventToParquetZeroesOperationID"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `ContractEventOutput` with `OperationID = null.IntFrom(131090201534533633)` (a valid TOID for an operation-scoped event), then calls `ToParquet()`. The resulting `ContractEventOutputParquet.OperationID` is `0` instead of `131090201534533633`, confirming that the Parquet conversion silently drops the operation ID. This proves every operation-scoped contract event exported to Parquet has its join key zeroed.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+	"time"
+
+	"github.com/guregu/null"
+)
+
+func TestContractEventToParquetZeroesOperationID(t *testing.T) {
+	// 1. Construct a ContractEventOutput with a non-zero OperationID
+	//    (mimics an operation-scoped event produced by TransformContractEvent)
+	expectedOpID := int64(131090201534533633) // TOID from existing test fixtures
+	ceo := ContractEventOutput{
+		TransactionHash:          "a87fef5eeb260269c380f2de456aad72b59bb315aaac777860456e09dac0bafb",
+		TransactionID:            131090201534533632,
+		Successful:               true,
+		LedgerSequence:           30521816,
+		ClosedAt:                 time.Date(2020, time.July, 9, 5, 28, 42, 0, time.UTC),
+		InSuccessfulContractCall: true,
+		ContractId:               "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+		Type:                     2,
+		TypeString:               "ContractEventTypeDiagnostic",
+		Topics:                   nil,
+		TopicsDecoded:            nil,
+		Data:                     nil,
+		DataDecoded:              nil,
+		ContractEventXDR:         "AAAA",
+		OperationID:              null.IntFrom(expectedOpID),
+	}
+
+	// Verify the input has a valid, non-zero OperationID
+	if !ceo.OperationID.Valid || ceo.OperationID.Int64 == 0 {
+		t.Fatal("precondition failed: input OperationID must be valid and non-zero")
+	}
+
+	// 2. Run the production Parquet conversion
+	parquetRaw := ceo.ToParquet()
+	parquetOut, ok := parquetRaw.(ContractEventOutputParquet)
+	if !ok {
+		t.Fatalf("ToParquet() returned unexpected type %T", parquetRaw)
+	}
+
+	// 3. Demonstrate the bug: OperationID is zeroed in Parquet output
+	if parquetOut.OperationID == 0 {
+		t.Logf("BUG CONFIRMED: Parquet OperationID is 0, expected %d", expectedOpID)
+		t.Logf("The ToParquet() method omits the OperationID field assignment,")
+		t.Logf("causing Go's zero-value to be used instead of the real TOID.")
+	} else if parquetOut.OperationID == expectedOpID {
+		t.Fatal("OperationID is correctly preserved — hypothesis not demonstrated")
+	} else {
+		t.Fatalf("OperationID has unexpected value %d (expected 0 or %d)", parquetOut.OperationID, expectedOpID)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestContractEventToParquetZeroesOperationID
+    data_integrity_poc_test.go:46: BUG CONFIRMED: Parquet OperationID is 0, expected 131090201534533633
+    data_integrity_poc_test.go:47: The ToParquet() method omits the OperationID field assignment,
+    data_integrity_poc_test.go:48: causing Go's zero-value to be used instead of the real TOID.
+--- PASS: TestContractEventToParquetZeroesOperationID (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.751s
+```
