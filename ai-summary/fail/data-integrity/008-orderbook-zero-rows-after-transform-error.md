@@ -295,3 +295,34 @@ time="2026-04-10T18:48:18.854-05:00" level=error msg="error json marshalling off
 PASS
 ok  	github.com/stellar/stellar-etl/v2/internal/input	0.761s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-10
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Exercises claimed bug**: NO — the PoC proves that directly calling `parseOrderbook()` with a synthetic removed-offer batch produces zero-valued rows, but it does not reproduce the behavior through any shipped command or in-repo caller. Repository search found `StreamOrderbooks()`, `ReceiveParsedOrderbooks()`, and `parseOrderbook()` referenced only inside `internal/input/orderbooks.go`.
+2. **Realistic preconditions**: NO — the PoC assumes removed offers can reach `parseOrderbook()` on a live path, but that was not established. In the only surrounding pipeline, `UpdateOrderbook()` ends with `orderbook = changeCache.GetChanges()`, which only rebinds its local slice header, so `exportOrderbookBatch()` keeps copying the original `startOrderbook` instead of propagating later changes.
+3. **Bug vs by-design**: HELPER BUG, NOT SHIPPED FINDING — if this helper is invoked with a failed transform, the zero-row behavior is real. The reviewed claim, however, is about concrete downstream table corruption, and that reachability was not demonstrated.
+4. **Final severity**: N/A — no current export-path impact was shown.
+5. **In scope**: NO — the investigation framing excludes theoretical issues without a concrete code path producing wrong output. Current repository evidence shows no active CLI/export surface for this orderbook pipeline.
+6. **Test correctness**: CORRECT BUT INSUFFICIENT — the test accurately captures isolated helper behavior, but it does not validate a live export path.
+7. **Alternative explanations**: YES — the observed zero rows are fully explained by invoking an unexported helper directly with a synthetic removed-offer batch outside the currently wired pipeline.
+8. **Novelty**: POSSIBLY NOVEL — novelty is not the blocker.
+
+### Rejection Reason
+
+The PoC demonstrates isolated helper behavior, not a reachable data-integrity bug in current exports. No in-repo caller wires the orderbook pipeline into a shipped command, and the only surrounding runtime path does not propagate updated slices, so the removed-offer precondition used by the PoC is not established on a live output surface.
+
+### Failed Checks
+
+- 1
+- 2
+- 5
+- 7
