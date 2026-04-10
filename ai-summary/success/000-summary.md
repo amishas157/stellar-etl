@@ -13,3 +13,4 @@
 - `cli-commands/004-ledger-entry-changes-leaks-file-descriptors.md` — Medium — `export_ledger_entry_changes` leaks two file descriptors per new batch/resource output and can stop later exports at the OS FD limit
 - `export-pipeline/001-tx-signers-encode-signatures.md` — High — transaction `tx_signers` encodes raw signature bytes as fake account IDs
 - `export-pipeline/002-parquet-upload-before-write.md` — High — four export commands upload stale prior-run parquet objects before regenerating current output
+- `export-pipeline/003-export-entry-swallows-write-errors.md` — Medium — `ExportEntry` logs failed JSON writes but returns `nil`, so exporters treat dropped rows as successful
