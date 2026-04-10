@@ -69,3 +69,65 @@ The bug is confirmed. The `TradeOutputParquet` struct is missing the `SellingLiq
 - **Setup**: Use an existing liquidity-pool trade test fixture (the `strictReceiveLPTrade` or `strictSendLPTrade` fixtures from `trade_test.go`)
 - **Steps**: Call `TransformTrade()` with a liquidity-pool trade input, then call `ToParquet()` on the resulting `TradeOutput`
 - **Assertion**: Assert that the `TradeOutputParquet` struct has a `SellingLiquidityPoolIDStrkey` field matching the JSON output's `SellingLiquidityPoolIDStrkey.String` value. Currently, the Parquet struct has no such field, so the test should fail at compile time or show the value is missing/zeroed.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestTradeParquetDropsLiquidityPoolStrkey"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `TradeOutput` with a populated `SellingLiquidityPoolIDStrkey` value (`"LACAKBQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGOE"`), calls the production `ToParquet()` method, and uses reflection to check whether the resulting `TradeOutputParquet` struct has a `SellingLiquidityPoolIDStrkey` field. The field does not exist, confirming that every liquidity-pool trade exported via `--write-parquet` silently drops the canonical strkey pool identifier.
+
+### Test Body
+
+```go
+func TestTradeParquetDropsLiquidityPoolStrkey(t *testing.T) {
+	// 1. Construct a TradeOutput with a populated strkey (mimics LP trade)
+	tradeJSON := TradeOutput{
+		SellingLiquidityPoolID:       null.StringFrom("0405060000000000000000000000000000000000000000000000000000000000"),
+		SellingLiquidityPoolIDStrkey: null.StringFrom("LACAKBQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGOE"),
+	}
+
+	// Verify the JSON struct has the strkey populated
+	if !tradeJSON.SellingLiquidityPoolIDStrkey.Valid || tradeJSON.SellingLiquidityPoolIDStrkey.String == "" {
+		t.Fatal("precondition failed: SellingLiquidityPoolIDStrkey should be populated in TradeOutput")
+	}
+
+	// 2. Convert to Parquet via production code path
+	parquetRaw := tradeJSON.ToParquet()
+	parquetVal := reflect.ValueOf(parquetRaw)
+
+	// 3. Check whether the Parquet struct has a SellingLiquidityPoolIDStrkey field
+	strKeyField := parquetVal.FieldByName("SellingLiquidityPoolIDStrkey")
+	if !strKeyField.IsValid() {
+		t.Errorf("BUG CONFIRMED: TradeOutputParquet has no SellingLiquidityPoolIDStrkey field — "+
+			"the populated JSON value %q is silently dropped during Parquet conversion",
+			tradeJSON.SellingLiquidityPoolIDStrkey.String)
+		return
+	}
+
+	// If the field exists, verify it carries the correct value
+	got := strKeyField.String()
+	want := tradeJSON.SellingLiquidityPoolIDStrkey.String
+	if got != want {
+		t.Errorf("SellingLiquidityPoolIDStrkey mismatch: got %q, want %q", got, want)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestTradeParquetDropsLiquidityPoolStrkey
+    data_integrity_poc_test.go:233: BUG CONFIRMED: TradeOutputParquet has no SellingLiquidityPoolIDStrkey field — the populated JSON value "LACAKBQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGOE" is silently dropped during Parquet conversion
+--- FAIL: TestTradeParquetDropsLiquidityPoolStrkey (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.711s
+```
