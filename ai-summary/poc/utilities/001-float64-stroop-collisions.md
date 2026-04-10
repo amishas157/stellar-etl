@@ -95,3 +95,81 @@ The collision threshold of ~1.07 billion real units is reachable for:
   2. Call `ConvertStroopValueToReal(xdr.Int64(10735946655003268))` — the next stroop value
   3. Also test extreme case: `ConvertStroopValueToReal(xdr.Int64(922337203685477580))` and `+1`
 - **Assertion**: Assert that both calls return the same `float64` value (proving collision). Assert `result1 == result2` where the source stroops differ by 1. This demonstrates that the ETL produces identical exported values for distinct on-chain amounts, confirming silent financial data corruption.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/utils/data_integrity_poc_test.go
+**Test Name**: "TestConvertStroopValueToReal_Float64Collision"
+**Test Language**: Go
+
+### Demonstration
+
+The test calls `ConvertStroopValueToReal` with two adjacent stroop values (differing by 1) at both the first collision threshold (~1.07B real units) and near-max Int64 values. In both cases, the function returns identical `float64` values, proving that the ETL silently merges distinct on-chain financial amounts into the same exported number. This confirms the hypothesis: `float64` precision loss in `ConvertStroopValueToReal` causes silent financial data corruption for large balances.
+
+### Test Body
+
+```go
+package utils
+
+import (
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestConvertStroopValueToReal_Float64Collision demonstrates that
+// ConvertStroopValueToReal produces identical float64 values for
+// distinct stroop inputs, proving silent financial data corruption.
+func TestConvertStroopValueToReal_Float64Collision(t *testing.T) {
+	tests := []struct {
+		name    string
+		stroopA xdr.Int64
+		stroopB xdr.Int64
+	}{
+		{
+			name:    "first collision at ~1.07B real units",
+			stroopA: 10735946655003267,
+			stroopB: 10735946655003268,
+		},
+		{
+			name:    "extreme near-max Int64",
+			stroopA: 922337203685477580,
+			stroopB: 922337203685477581,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resultA := ConvertStroopValueToReal(tc.stroopA)
+			resultB := ConvertStroopValueToReal(tc.stroopB)
+
+			// The source stroops differ by 1, so the exported values
+			// SHOULD differ. If they are equal, precision was lost.
+			if resultA == resultB {
+				t.Errorf("float64 collision: stroop %d and %d both produce %v — distinct on-chain amounts are indistinguishable in ETL output",
+					tc.stroopA, tc.stroopB, resultA)
+			}
+		})
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestConvertStroopValueToReal_Float64Collision
+=== RUN   TestConvertStroopValueToReal_Float64Collision/first_collision_at_~1.07B_real_units
+    data_integrity_poc_test.go:38: float64 collision: stroop 10735946655003267 and 10735946655003268 both produce 1.0735946655003268e+09 — distinct on-chain amounts are indistinguishable in ETL output
+=== RUN   TestConvertStroopValueToReal_Float64Collision/extreme_near-max_Int64
+    data_integrity_poc_test.go:38: float64 collision: stroop 922337203685477580 and 922337203685477581 both produce 9.223372036854776e+10 — distinct on-chain amounts are indistinguishable in ETL output
+--- FAIL: TestConvertStroopValueToReal_Float64Collision (0.00s)
+    --- FAIL: TestConvertStroopValueToReal_Float64Collision/first_collision_at_~1.07B_real_units (0.00s)
+    --- FAIL: TestConvertStroopValueToReal_Float64Collision/extreme_near-max_Int64 (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/utils	0.689s
+```
