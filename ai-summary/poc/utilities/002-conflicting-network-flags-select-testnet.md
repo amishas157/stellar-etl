@@ -73,3 +73,80 @@ Despite the unlikely trigger, this is a real missing-validation bug where the co
 - **Setup**: Construct a `CommonFlagValues` with both `IsTest: true` and `IsFuture: true`
 - **Steps**: Call `GetEnvironmentDetails(commonFlags)` and inspect the returned `EnvironmentDetails`
 - **Assertion**: Assert that the returned `Network` is `"testnet"` (not `"futurenet"`) AND that the `NetworkPassphrase` matches the testnet passphrase — confirming the silent prioritization. Alternatively, assert that a proper validation function (if added) returns an error when both flags are set.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/utils/data_integrity_poc_test.go
+**Test Name**: "TestConflictingNetworkFlagsSilentlySelectTestnet"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `CommonFlagValues` with both `IsTest: true` and `IsFuture: true`, then calls `GetEnvironmentDetails`. The function silently returns testnet configuration (Network="testnet", Passphrase="Test SDF Network ; September 2015") without any error or warning, proving that the `if/else if` chain prioritizes testnet and completely ignores the conflicting futurenet flag. No validation rejects the ambiguous input.
+
+### Test Body
+
+```go
+package utils
+
+import (
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/network"
+)
+
+// TestConflictingNetworkFlagsSilentlySelectTestnet demonstrates that when both
+// IsTest and IsFuture are true, GetEnvironmentDetails silently returns testnet
+// configuration instead of rejecting the conflicting input.
+func TestConflictingNetworkFlagsSilentlySelectTestnet(t *testing.T) {
+	// Construct input with both network flags set — an ambiguous configuration
+	conflictingFlags := CommonFlagValues{
+		IsTest:   true,
+		IsFuture: true,
+	}
+
+	details := GetEnvironmentDetails(conflictingFlags)
+
+	// The function silently resolves the conflict by prioritizing testnet.
+	// This proves the bug: futurenet was also requested but is ignored.
+	if details.Network != "testnet" {
+		t.Errorf("Expected Network to be silently resolved to 'testnet', got %q", details.Network)
+	}
+
+	if details.NetworkPassphrase != network.TestNetworkPassphrase {
+		t.Errorf("Expected testnet passphrase, got %q", details.NetworkPassphrase)
+	}
+
+	// Verify that futurenet configuration is NOT returned despite IsFuture being true
+	futurenetPassphrase := "Test SDF Future Network ; October 2022"
+	if details.NetworkPassphrase == futurenetPassphrase {
+		t.Errorf("Got futurenet passphrase — expected testnet to win the silent priority")
+	}
+
+	if details.Network == "futurenet" {
+		t.Errorf("Got futurenet network — expected testnet to win the silent priority")
+	}
+
+	t.Logf("BUG CONFIRMED: Both IsTest=true and IsFuture=true accepted without error.")
+	t.Logf("GetEnvironmentDetails silently returned testnet config: Network=%q, Passphrase=%q",
+		details.Network, details.NetworkPassphrase)
+	t.Logf("Futurenet flag was silently ignored — no error, no warning.")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestConflictingNetworkFlagsSilentlySelectTestnet
+    data_integrity_poc_test.go:41: BUG CONFIRMED: Both IsTest=true and IsFuture=true accepted without error.
+    data_integrity_poc_test.go:42: GetEnvironmentDetails silently returned testnet config: Network="testnet", Passphrase="Test SDF Network ; September 2015"
+    data_integrity_poc_test.go:44: Futurenet flag was silently ignored — no error, no warning.
+--- PASS: TestConflictingNetworkFlagsSilentlySelectTestnet (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/utils	0.792s
+```
