@@ -12,3 +12,4 @@
 - `cli-commands/003-restored-key-parquet-path-missing.md` — High — `export_ledger_entry_changes --export-restored-keys --write-parquet` emits a zero-row parquet file while JSON contains restored-key data
 - `cli-commands/004-ledger-entry-changes-leaks-file-descriptors.md` — Medium — `export_ledger_entry_changes` leaks two file descriptors per new batch/resource output and can stop later exports at the OS FD limit
 - `export-pipeline/001-tx-signers-encode-signatures.md` — High — transaction `tx_signers` encodes raw signature bytes as fake account IDs
+- `export-pipeline/002-parquet-upload-before-write.md` — High — four export commands upload stale prior-run parquet objects before regenerating current output

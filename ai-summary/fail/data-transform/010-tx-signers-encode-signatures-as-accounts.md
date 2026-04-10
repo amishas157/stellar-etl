@@ -33,4 +33,30 @@ The helper never inspects a signer key; it only sees `xdr.DecoratedSignature` an
 
 ## Anti-Evidence
 
-If the original intent of `tx_signers` was “opaque signature material encoded as a string,” the current implementation is consistent with that narrower goal. But the schema name, account-ID version byte, and `G...` output format all present the values as signer identities, which makes the exported data materially misleading.
+If the original intent of `tx_signers` was "opaque signature material encoded as a string," the current implementation is consistent with that narrower goal. But the schema name, account-ID version byte, and `G...` output format all present the values as signer identities, which makes the exported data materially misleading.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-10
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of `ai-summary/success/data-transform/001-tx-signers-encode-signature-bytes.md.gh-published`
+**Failed At**: reviewer
+
+### Trace Summary
+
+This hypothesis describes the identical bug already confirmed, PoC-verified, adversarially reviewed, and published in `ai-summary/success/data-transform/001-tx-signers-encode-signature-bytes.md.gh-published`. That success file documents the same root cause (`getTxSigners()` encoding `sig.Signature` as `AccountID`), the same affected code paths (classic and fee-bump branches in `TransformTransaction`), and the same impact (108-character fake `G...` strings instead of 56-character real account IDs). This hypothesis was also previously rejected as a duplicate in fail/008 and fail/009.
+
+### Code Paths Examined
+
+- `internal/transform/transaction.go:349-357` — `getTxSigners()` helper, same code path identified in success/001, fail/008, and fail/009
+
+### Why It Failed
+
+This is a third re-submission of an already-confirmed and published finding. The success file `001-tx-signers-encode-signature-bytes.md.gh-published` covers the identical mechanism, code paths, and impact. Fail files 008 and 009 already document prior duplicate rejections.
+
+### Lesson Learned
+
+The hypothesis generator continues to re-propose this finding despite it existing in `ai-summary/success/`. A pre-generation dedup check against success files for the target subsystem would prevent this recurring waste.

@@ -1,8 +1,8 @@
 {
   "hypothesis_viable": 43,
   "hypothesis_not_viable": 21,
-  "review_viable": 23,
-  "review_not_viable": 11,
+  "review_viable": 24,
+  "review_not_viable": 12,
   "poc_viable": 16,
   "poc_not_viable": 0,
   "final_review_viable": 14,
@@ -12,9 +12,9 @@
   "publishes": 14,
   "agent_failures": 2,
   "agent_timeouts": 0,
-  "total_spawned": 91,
+  "total_spawned": 93,
   "input_tokens": 0,
-  "output_tokens": 829267,
+  "output_tokens": 839332,
   "cache_read_tokens": 0,
   "per_subsystem": {
     "data-integrity": {
@@ -44,7 +44,7 @@
     "data-transform": {
       "hypothesis_viable": 8,
       "hypothesis_not_viable": 4,
-      "review_not_viable": 6,
+      "review_not_viable": 7,
       "review_viable": 3,
       "poc_viable": 1,
       "final_review_viable": 1
@@ -59,7 +59,7 @@
     "export-pipeline": {
       "hypothesis_viable": 11,
       "hypothesis_not_viable": 3,
-      "review_viable": 7,
+      "review_viable": 8,
       "review_not_viable": 2,
       "poc_viable": 2,
       "final_review_viable": 1
@@ -73,9 +73,9 @@
       "final_review_not_viable": 1
     },
     "claude-opus-4-6": {
-      "review_viable": 23,
+      "review_viable": 24,
       "poc_viable": 16,
-      "review_not_viable": 11
+      "review_not_viable": 12
     },
     "claude-sonnet-4-6": {}
   },
@@ -87,7 +87,7 @@
     },
     "reviewer": {
       "input": 0,
-      "output": 223884,
+      "output": 233949,
       "cache_read": 0
     },
     "poc": {
@@ -114,7 +114,7 @@
     },
     "claude-opus-4-6": {
       "input": 0,
-      "output": 393977,
+      "output": 404042,
       "cache_read": 0
     },
     "claude-sonnet-4-6": {
@@ -568,6 +568,16 @@
       "poc",
       "claude-opus-4-6",
       313.0
+    ],
+    [
+      "reviewer",
+      "claude-opus-4-6",
+      213.1
+    ],
+    [
+      "reviewer",
+      "claude-opus-4-6",
+      49.4
     ]
   ],
   "costs": {
@@ -576,10 +586,10 @@
         "models": {
           "claude-opus-4-6": {
             "input_tokens": 0,
-            "output_tokens": 393977,
+            "output_tokens": 404042,
             "cache_read_tokens": 0,
-            "total_cost": 4.5,
-            "premium_requests": 150
+            "total_cost": 4.68,
+            "premium_requests": 156
           },
           "claude-sonnet-4-6": {
             "input_tokens": 0,
@@ -596,10 +606,10 @@
             "premium_requests": 25
           }
         },
-        "provider_cost": 5.67
+        "provider_cost": 5.85
       }
     },
-    "total_cost": 5.67,
+    "total_cost": 5.85,
     "stages": {
       "hypothesis": {
         "copilot": {
@@ -611,8 +621,8 @@
       "reviewer": {
         "copilot": {
           "input_tokens": 0,
-          "output_tokens": 223884,
-          "premium_requests": 102
+          "output_tokens": 233949,
+          "premium_requests": 108
         }
       },
       "poc": {
