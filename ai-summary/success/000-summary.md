@@ -34,3 +34,4 @@
 - `data-input/002-asset-readers-overshoot-limit-within-ledger.md` — Medium — `export_assets --limit` scans through the rest of the current ledger and can emit extra asset rows
 - `data-transform/009-trustline-parquet-drops-liquidity-pool-id-strkey.md` — High — trustline Parquet export drops populated `liquidity_pool_id_strkey` for pool-share trustlines
 - `data-transform/010-ledger-entry-parquet-collapses-null-sponsor.md` — High — ledger-entry Parquet export rewrites null `sponsor` values to empty strings
+- `data-transform/011-effects-parquet-collapses-address-muxed-nullability.md` — High — effect Parquet export rewrites null `address_muxed` to empty strings
