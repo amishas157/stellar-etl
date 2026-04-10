@@ -75,3 +75,101 @@ This produces incorrect but plausible-looking data in a field that downstream co
 - **Setup**: Use existing test transaction fixtures. The current test data already demonstrates the bug — the hardcoded `TxSigners` values are 108-char strings derived from signatures.
 - **Steps**: (1) Decode the test transaction envelope to extract the `DecoratedSignature`. (2) Show that `sig.Signature` is 64 bytes. (3) Show that `strkey.Encode(VersionByteAccountID, sig.Signature)` produces the 108-char string in the test expectation. (4) Show that the transaction's actual source account public key is a different 56-char G... address.
 - **Assertion**: Assert that the `TxSigners` output does NOT match any actual signer public key on the transaction, and that the encoded strings are 108 characters (not the 56-character standard for account addresses). This proves the field contains encoded signature bytes, not signer identities.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestTxSignersEncodeSignatureBytesNotPublicKeys"
+**Test Language**: Go
+
+### Demonstration
+
+The test calls the production `getTxSigners()` function with the same `DecoratedSignature` fixture used in the existing test suite. It proves that the 64-byte signature payload is encoded as a 108-character G... string (instead of the standard 56-character Stellar address from a 32-byte public key), that this output exactly matches independently encoding `sig.Signature` via `strkey.Encode(VersionByteAccountID, ...)`, and that it does NOT match the transaction's actual source account (`GCEODJVUUVYVFD5KT4TOEDTMXQ76OPFOQC2EMYYMLPXQCUVPOB6XRWPQ`).
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/strkey"
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestTxSignersEncodeSignatureBytesNotPublicKeys demonstrates that getTxSigners()
+// encodes the 64-byte ed25519 signature payload as a G... account ID, rather than
+// encoding the actual signer's 32-byte public key. This produces 108-character strings
+// that look like Stellar addresses but actually contain signature data.
+func TestTxSignersEncodeSignatureBytesNotPublicKeys(t *testing.T) {
+	// The signature from the test fixtures (64 bytes — an ed25519 signature, NOT a public key)
+	sig := xdr.DecoratedSignature{
+		Hint: xdr.SignatureHint{99, 66, 175, 143},
+		Signature: xdr.Signature{
+			244, 107, 139, 92, 189, 156, 207, 79, 84, 56, 2, 70, 75, 22, 237, 50,
+			100, 242, 159, 177, 27, 240, 66, 122, 182, 45, 189, 78, 5, 127, 26, 61,
+			179, 238, 229, 76, 32, 206, 122, 13, 154, 133, 148, 149, 29, 250, 48, 132,
+			44, 86, 163, 56, 32, 44, 75, 87, 226, 251, 76, 4, 59, 182, 132, 8,
+		},
+	}
+
+	// 1. Verify the signature payload is 64 bytes (not 32 bytes like a public key)
+	if len(sig.Signature) != 64 {
+		t.Fatalf("expected signature to be 64 bytes, got %d", len(sig.Signature))
+	}
+
+	// 2. Call the production function
+	signers, err := getTxSigners([]xdr.DecoratedSignature{sig})
+	if err != nil {
+		t.Fatalf("getTxSigners returned error: %v", err)
+	}
+
+	// 3. The output string is 108 characters — NOT the 56 characters of a real Stellar G... address
+	const standardStellarAddressLen = 56
+	if len(signers[0]) == standardStellarAddressLen {
+		t.Fatalf("expected signer string to NOT be %d chars (standard address length), but it was", standardStellarAddressLen)
+	}
+	if len(signers[0]) != 108 {
+		t.Fatalf("expected signer string to be 108 chars (encoded 64-byte signature), got %d", len(signers[0]))
+	}
+	t.Logf("signer string length: %d (standard is %d)", len(signers[0]), standardStellarAddressLen)
+
+	// 4. Independently reproduce: encoding the 64-byte signature as an AccountID yields the same string
+	directlyEncoded, err := strkey.Encode(strkey.VersionByteAccountID, sig.Signature)
+	if err != nil {
+		t.Fatalf("direct strkey.Encode failed: %v", err)
+	}
+	if signers[0] != directlyEncoded {
+		t.Errorf("getTxSigners output doesn't match direct encoding of signature bytes:\n  got:  %s\n  want: %s", signers[0], directlyEncoded)
+	}
+
+	// 5. Show that the output does NOT match the transaction's actual source account
+	// testAccount1Address is the source account used in the test fixtures
+	actualSourceAccount := testAccount1Address // "GCEODJVUUVYVFD5KT4TOEDTMXQ76OPFOQC2EMYYMLPXQCUVPOB6XRWPQ"
+	if signers[0] == actualSourceAccount {
+		t.Fatal("signer string unexpectedly equals the actual source account — hypothesis would be disproved")
+	}
+	t.Logf("source account:  %s (56 chars)", actualSourceAccount)
+	t.Logf("tx_signers[0]:   %s (108 chars)", signers[0])
+	t.Log("CONFIRMED: tx_signers contains strkey-encoded signature bytes, not signer identities")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestTxSignersEncodeSignatureBytesNotPublicKeys
+    data_integrity_poc_test.go:45: signer string length: 108 (standard is 56)
+    data_integrity_poc_test.go:62: source account:  GCEODJVUUVYVFD5KT4TOEDTMXQ76OPFOQC2EMYYMLPXQCUVPOB6XRWPQ (56 chars)
+    data_integrity_poc_test.go:63: tx_signers[0]:   GD2GXC24XWOM6T2UHABEMSYW5UZGJ4U7WEN7AQT2WYW32TQFP4ND3M7O4VGCBTT2BWNILFEVDX5DBBBMK2RTQIBMJNL6F62MAQ53NBAIXUDA (108 chars)
+    data_integrity_poc_test.go:64: CONFIRMED: tx_signers contains strkey-encoded signature bytes, not signer identities
+--- PASS: TestTxSignersEncodeSignatureBytesNotPublicKeys (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.780s
+```
