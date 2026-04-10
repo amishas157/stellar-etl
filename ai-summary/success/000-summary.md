@@ -26,3 +26,4 @@
 - `export-pipeline/011-text-hash-muxed-memos-forced-to-id-zero.md` — High — token transfer export rewrites text/hash `ToMuxedInfo` arms into fabricated muxed account ID `0`
 - `data-transform/004-trade-parquet-collapses-null-seller-is-exact.md` — High — trade Parquet export flattens nullable `seller_is_exact` to `false`, collapsing manage-offer and strict-send semantics
 - `data-transform/005-trade-parquet-drops-liquidity-pool-strkey.md` — High — trade Parquet export drops populated `selling_liquidity_pool_id_strkey` for liquidity-pool trades
+- `data-transform/006-contract-data-parquet-drops-ledger-key-hash-base64.md` — High — contract-data Parquet export drops populated `ledger_key_hash_base_64` from every non-nonce row
