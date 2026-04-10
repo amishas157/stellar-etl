@@ -68,3 +68,84 @@ The `SellingLiquidityPoolIDStrkey` field is present in the JSON output schema an
 - **Setup**: Use the existing pool trade test fixtures from `trade_test.go` (the test cases at lines 789 and 815 that set `SellingLiquidityPoolIDStrkey`)
 - **Steps**: Call `tradeOutput.ToParquet()` on a `TradeOutput` with a non-empty `SellingLiquidityPoolIDStrkey`, then assert that the resulting `TradeOutputParquet` contains the strkey value
 - **Assertion**: The test will fail to compile because `TradeOutputParquet` has no `SellingLiquidityPoolIDStrkey` field — this directly demonstrates the omission. The fix requires adding the field to `TradeOutputParquet` and the corresponding assignment in `ToParquet()`.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestTradeParquetOmitsLiquidityPoolIDStrkey"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `TradeOutput` with a non-empty `SellingLiquidityPoolIDStrkey` (a valid LP strkey), calls the production `ToParquet()` method, and uses reflection to check whether the resulting `TradeOutputParquet` struct contains a `SellingLiquidityPoolIDStrkey` field. The field is absent, proving that every liquidity pool trade silently loses its canonical strkey identifier when exported to parquet format.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"reflect"
+	"testing"
+
+	"github.com/guregu/null"
+)
+
+func TestTradeParquetOmitsLiquidityPoolIDStrkey(t *testing.T) {
+	// Construct a TradeOutput representing a liquidity pool trade with a non-empty strkey
+	tradeOutput := TradeOutput{
+		Order:                        1,
+		SellingLiquidityPoolID:       null.StringFrom("0405060000000000000000000000000000000000000000000000000000000000"),
+		SellingLiquidityPoolIDStrkey: null.StringFrom("LACAKBQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGOE"),
+		LiquidityPoolFee:             null.IntFrom(30),
+		TradeType:                    2,
+	}
+
+	// Verify the JSON struct carries the strkey
+	if !tradeOutput.SellingLiquidityPoolIDStrkey.Valid || tradeOutput.SellingLiquidityPoolIDStrkey.String == "" {
+		t.Fatal("precondition: TradeOutput.SellingLiquidityPoolIDStrkey should be non-empty")
+	}
+
+	// Convert to parquet representation via the production code path
+	parquetResult := tradeOutput.ToParquet()
+
+	// Use reflection to check whether the parquet struct has the strkey field
+	parquetVal := reflect.ValueOf(parquetResult)
+	parquetType := parquetVal.Type()
+
+	fieldFound := false
+	for i := 0; i < parquetType.NumField(); i++ {
+		if parquetType.Field(i).Name == "SellingLiquidityPoolIDStrkey" {
+			fieldFound = true
+			val := parquetVal.Field(i).String()
+			if val != tradeOutput.SellingLiquidityPoolIDStrkey.String {
+				t.Errorf("SellingLiquidityPoolIDStrkey value mismatch: parquet has %q, JSON has %q",
+					val, tradeOutput.SellingLiquidityPoolIDStrkey.String)
+			}
+			break
+		}
+	}
+
+	if !fieldFound {
+		t.Errorf("TradeOutputParquet is missing SellingLiquidityPoolIDStrkey field; "+
+			"JSON output includes selling_liquidity_pool_id_strkey=%q but parquet schema has no column for it — "+
+			"liquidity pool strkey is silently dropped in parquet exports",
+			tradeOutput.SellingLiquidityPoolIDStrkey.String)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestTradeParquetOmitsLiquidityPoolIDStrkey
+    data_integrity_poc_test.go:46: TradeOutputParquet is missing SellingLiquidityPoolIDStrkey field; JSON output includes selling_liquidity_pool_id_strkey="LACAKBQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGOE" but parquet schema has no column for it — liquidity pool strkey is silently dropped in parquet exports
+--- FAIL: TestTradeParquetOmitsLiquidityPoolIDStrkey (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.832s
+```
