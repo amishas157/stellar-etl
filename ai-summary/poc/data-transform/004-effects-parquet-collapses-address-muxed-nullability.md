@@ -68,3 +68,100 @@ The bug follows the identical pattern as the confirmed success 003 (transaction 
 - **Setup**: Construct two `EffectOutput` values: one with `AddressMuxed: null.String{}` (classic account) and one with `AddressMuxed: null.StringFrom("MAAAA...")` (muxed account)
 - **Steps**: (1) JSON-marshal both and verify the first produces `"address_muxed":null` while the second produces `"address_muxed":"MAAAA..."`. (2) Call `.ToParquet()` on both and cast to `EffectOutputParquet`. (3) Compare `AddressMuxed` fields in the Parquet structs.
 - **Assertion**: Assert that the Parquet `AddressMuxed` for the classic-account effect is `""` while the JSON marshaling preserves `null`, demonstrating the information loss. The two Parquet rows should differ, but the null-vs-empty distinction that exists in JSON is collapsed in Parquet.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestParquetCollapsesNullAddressMuxedToEmptyString"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs two `EffectOutput` values — one with `AddressMuxed: null.String{}` (classic account, no muxed address) and one with `AddressMuxed: null.StringFrom("MAAAA...")` (muxed account). JSON marshaling preserves the null-vs-present distinction correctly. However, calling `.ToParquet()` on the classic-account effect produces `AddressMuxed = ""` — collapsing the semantically-null field into an empty string, making it impossible for Parquet consumers to distinguish "no muxed address" from "empty muxed address".
+
+### Test Body
+
+```go
+func TestParquetCollapsesNullAddressMuxedToEmptyString(t *testing.T) {
+	muxedAddr := "MAAAAAAAAAAAAAB7BQ2L7E5NBWMN77UJ2LQMLJFSG7MFQOO6BLSW4MRWW33XPUZ6HANPT6EHJBPK"
+
+	// Classic-account effect: AddressMuxed should be null (no muxed address)
+	classicEffect := EffectOutput{
+		Address:      "GABC",
+		AddressMuxed: null.String{}, // Valid=false — no muxed address
+		OperationID:  12345,
+		Type:         1,
+		TypeString:   "account_created",
+	}
+
+	// Muxed-account effect: AddressMuxed should carry the real M... address
+	muxedEffect := EffectOutput{
+		Address:      "GABC",
+		AddressMuxed: null.StringFrom(muxedAddr), // Valid=true — real muxed address
+		OperationID:  12346,
+		Type:         1,
+		TypeString:   "account_created",
+	}
+
+	t.Run("JSON_preserves_null_vs_present", func(t *testing.T) {
+		classicJSON, err := json.Marshal(classicEffect.AddressMuxed)
+		if err != nil {
+			t.Fatalf("failed to marshal classic AddressMuxed: %v", err)
+		}
+		if string(classicJSON) != "null" {
+			t.Fatalf("expected classic AddressMuxed JSON to be null, got %s", string(classicJSON))
+		}
+
+		muxedJSON, err := json.Marshal(muxedEffect.AddressMuxed)
+		if err != nil {
+			t.Fatalf("failed to marshal muxed AddressMuxed: %v", err)
+		}
+		if string(muxedJSON) != `"`+muxedAddr+`"` {
+			t.Fatalf("expected muxed AddressMuxed JSON to be %q, got %s", muxedAddr, string(muxedJSON))
+		}
+	})
+
+	t.Run("Parquet_collapses_null_to_empty_string", func(t *testing.T) {
+		classicParquet := classicEffect.ToParquet().(EffectOutputParquet)
+		muxedParquet := muxedEffect.ToParquet().(EffectOutputParquet)
+
+		// Muxed-account effect should preserve the address in Parquet
+		if muxedParquet.AddressMuxed != muxedAddr {
+			t.Errorf("muxed-account Parquet AddressMuxed should be %s, got %s",
+				muxedAddr, muxedParquet.AddressMuxed)
+		}
+
+		// Classic-account effect: Parquet collapses null to ""
+		if classicParquet.AddressMuxed != "" {
+			t.Fatalf("expected classic Parquet AddressMuxed to be empty string, got %q",
+				classicParquet.AddressMuxed)
+		}
+
+		// The bug: JSON has null, Parquet has "" — null semantics are lost
+		if !classicEffect.AddressMuxed.Valid && classicParquet.AddressMuxed == "" {
+			t.Errorf("NULL COLLAPSE CONFIRMED: Effect AddressMuxed JSON is null (Valid=%v), "+
+				"but Parquet AddressMuxed is %q — consumers cannot distinguish "+
+				"'no muxed address' from 'empty muxed address'",
+				classicEffect.AddressMuxed.Valid, classicParquet.AddressMuxed)
+		}
+	})
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestParquetCollapsesNullAddressMuxedToEmptyString
+=== RUN   TestParquetCollapsesNullAddressMuxedToEmptyString/JSON_preserves_null_vs_present
+=== RUN   TestParquetCollapsesNullAddressMuxedToEmptyString/Parquet_collapses_null_to_empty_string
+    data_integrity_poc_test.go:180: NULL COLLAPSE CONFIRMED: Effect AddressMuxed JSON is null (Valid=false), but Parquet AddressMuxed is "" — consumers cannot distinguish 'no muxed address' from 'empty muxed address'
+--- FAIL: TestParquetCollapsesNullAddressMuxedToEmptyString (0.00s)
+    --- PASS: TestParquetCollapsesNullAddressMuxedToEmptyString/JSON_preserves_null_vs_present (0.00s)
+    --- FAIL: TestParquetCollapsesNullAddressMuxedToEmptyString/Parquet_collapses_null_to_empty_string (0.00s)
+FAIL
+```
