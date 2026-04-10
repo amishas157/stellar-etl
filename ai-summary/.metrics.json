@@ -1,7 +1,7 @@
 {
   "hypothesis_viable": 72,
   "hypothesis_not_viable": 30,
-  "review_viable": 36,
+  "review_viable": 37,
   "review_not_viable": 23,
   "poc_viable": 27,
   "poc_not_viable": 0,
@@ -12,9 +12,9 @@
   "publishes": 26,
   "agent_failures": 3,
   "agent_timeouts": 0,
-  "total_spawned": 159,
+  "total_spawned": 160,
   "input_tokens": 0,
-  "output_tokens": 1438112,
+  "output_tokens": 1444314,
   "cache_read_tokens": 0,
   "per_subsystem": {
     "data-integrity": {
@@ -45,7 +45,7 @@
       "hypothesis_viable": 16,
       "hypothesis_not_viable": 6,
       "review_not_viable": 7,
-      "review_viable": 9,
+      "review_viable": 10,
       "poc_viable": 3,
       "final_review_viable": 3
     },
@@ -80,7 +80,7 @@
       "final_review_not_viable": 1
     },
     "claude-opus-4-6": {
-      "review_viable": 36,
+      "review_viable": 37,
       "poc_viable": 27,
       "review_not_viable": 23
     },
@@ -94,7 +94,7 @@
     },
     "reviewer": {
       "input": 0,
-      "output": 361307,
+      "output": 367509,
       "cache_read": 0
     },
     "poc": {
@@ -121,7 +121,7 @@
     },
     "claude-opus-4-6": {
       "input": 0,
-      "output": 643356,
+      "output": 649558,
       "cache_read": 0
     },
     "claude-sonnet-4-6": {
@@ -915,6 +915,11 @@
       "publish",
       "claude-sonnet-4-6",
       83.8
+    ],
+    [
+      "reviewer",
+      "claude-opus-4-6",
+      151.5
     ]
   ],
   "costs": {
@@ -923,10 +928,10 @@
         "models": {
           "claude-opus-4-6": {
             "input_tokens": 0,
-            "output_tokens": 643356,
+            "output_tokens": 649558,
             "cache_read_tokens": 0,
-            "total_cost": 7.74,
-            "premium_requests": 258
+            "total_cost": 7.83,
+            "premium_requests": 261
           },
           "claude-sonnet-4-6": {
             "input_tokens": 0,
@@ -943,10 +948,10 @@
             "premium_requests": 45
           }
         },
-        "provider_cost": 9.87
+        "provider_cost": 9.96
       }
     },
-    "total_cost": 9.87,
+    "total_cost": 9.96,
     "stages": {
       "hypothesis": {
         "copilot": {
@@ -958,8 +963,8 @@
       "reviewer": {
         "copilot": {
           "input_tokens": 0,
-          "output_tokens": 361307,
-          "premium_requests": 177
+          "output_tokens": 367509,
+          "premium_requests": 180
         }
       },
       "poc": {
