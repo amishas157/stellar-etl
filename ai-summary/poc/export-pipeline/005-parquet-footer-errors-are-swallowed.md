@@ -81,3 +81,153 @@ If any of these steps fail, the file is truncated or missing its footer. Without
   2. Instrument or mock the underlying file writer to fail during `WriteStop()` (e.g., close the underlying fd before `WriteStop()` runs, or use a size-limited temp filesystem). Observe that `WriteParquet()` returns without error/fatal.
   3. Attempt to read the resulting Parquet file with `parquet-go`'s reader — it should fail with a missing/corrupt footer error.
 - **Assertion**: Demonstrate that `WriteParquet()` can return normally (no Fatal) while producing an invalid Parquet file. After the fix, `WriteStop()` and `Close()` errors should trigger `cmdLogger.Fatal()` consistent with the function's existing error-handling pattern.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: cmd/data_integrity_poc_test.go
+**Test Name**: "TestWriteParquetFooterErrorSwallowed"
+**Test Language**: Go
+
+### Demonstration
+
+The test replicates `WriteParquet()`'s exact code path using `parquet-go`'s `local.NewLocalFileWriter` and `writer.NewParquetWriter`. After successfully writing a record (same as production), the test closes the underlying OS file descriptor to simulate a filesystem error during finalization. `WriteStop()` returns a non-nil error (`write ... file already closed`), but in production this error is silently discarded by `defer writer.WriteStop()`. The resulting file has no valid Parquet footer and cannot be opened by any Parquet reader — yet `WriteParquet()` would return normally and callers would proceed to upload the corrupt file.
+
+### Test Body
+
+```go
+package cmd
+
+import (
+	"testing"
+
+	"github.com/xitongsys/parquet-go-source/local"
+	"github.com/xitongsys/parquet-go/reader"
+	"github.com/xitongsys/parquet-go/writer"
+)
+
+// pocParquetRow is a minimal Parquet schema for the PoC test.
+// Using a simple struct avoids schema-inference issues with complex list fields.
+type pocParquetRow struct {
+	ID   int64  `parquet:"name=id, type=INT64"`
+	Name string `parquet:"name=name, type=BYTE_ARRAY, convertedtype=UTF8, encoding=PLAIN_DICTIONARY"`
+}
+
+// TestWriteParquetFooterErrorSwallowed demonstrates that WriteParquet() silently
+// drops errors from writer.WriteStop() (which writes the Parquet footer) because
+// it uses bare `defer writer.WriteStop()` without checking the return value.
+//
+// The test replicates WriteParquet()'s code path, then closes the underlying OS
+// file descriptor before WriteStop() runs. WriteStop() returns a non-nil error
+// but — as in the production code — a bare defer would discard it, leaving a
+// truncated Parquet file with no footer on disk.
+func TestWriteParquetFooterErrorSwallowed(t *testing.T) {
+	schema := new(pocParquetRow)
+
+	// --- Step 1: Baseline — produce a valid Parquet file ---
+	baselinePath := t.TempDir() + "/baseline.parquet"
+
+	pf, err := local.NewLocalFileWriter(baselinePath)
+	if err != nil {
+		t.Fatalf("baseline: cannot create parquet file: %v", err)
+	}
+	pw, err := writer.NewParquetWriter(pf, schema, 1)
+	if err != nil {
+		t.Fatalf("baseline: cannot create parquet writer: %v", err)
+	}
+	if err := pw.Write(pocParquetRow{ID: 1, Name: "test"}); err != nil {
+		t.Fatalf("baseline: cannot write record: %v", err)
+	}
+	if err := pw.WriteStop(); err != nil {
+		t.Fatalf("baseline: WriteStop failed: %v", err)
+	}
+	pf.Close()
+
+	// Verify baseline file is valid
+	baseReader, err := local.NewLocalFileReader(baselinePath)
+	if err != nil {
+		t.Fatalf("baseline: cannot open parquet file for reading: %v", err)
+	}
+	pr, err := reader.NewParquetReader(baseReader, schema, 1)
+	if err != nil {
+		t.Fatalf("baseline: cannot create parquet reader (no valid footer?): %v", err)
+	}
+	if pr.GetNumRows() != 1 {
+		t.Fatalf("baseline: expected 1 row, got %d", pr.GetNumRows())
+	}
+	pr.ReadStop()
+	baseReader.Close()
+	t.Log("Baseline: valid Parquet file with 1 row produced and verified")
+
+	// --- Step 2: Replicate WriteParquet's code path, but sabotage the fd ---
+	corruptPath := t.TempDir() + "/corrupt.parquet"
+
+	parquetFile, err := local.NewLocalFileWriter(corruptPath)
+	if err != nil {
+		t.Fatalf("could not create parquet file: %v", err)
+	}
+
+	pw2, err := writer.NewParquetWriter(parquetFile, schema, 1)
+	if err != nil {
+		t.Fatalf("could not create parquet writer: %v", err)
+	}
+
+	// Write records — this succeeds, just as in production
+	if err := pw2.Write(pocParquetRow{ID: 1, Name: "test"}); err != nil {
+		t.Fatalf("could not write record: %v", err)
+	}
+
+	// Sabotage: close the underlying OS file descriptor to simulate a
+	// filesystem error (full disk, network mount disconnect, etc.)
+	localFile := parquetFile.(*local.LocalFile)
+	localFile.File.Close()
+
+	// Now call WriteStop() — this is what the bare `defer writer.WriteStop()`
+	// does in production. It tries to write the Parquet footer to the file,
+	// but the fd is already closed, so it will fail.
+	writeStopErr := pw2.WriteStop()
+
+	// --- Step 3: Assert that WriteStop() returned an error ---
+	if writeStopErr == nil {
+		t.Fatal("expected WriteStop() to return an error after fd was closed, but got nil")
+	}
+	t.Logf("WriteStop() returned error (as expected): %v", writeStopErr)
+	t.Log("In production, `defer writer.WriteStop()` silently discards this error")
+
+	// --- Step 4: Verify the resulting file is an invalid Parquet file ---
+	corruptReader, err := local.NewLocalFileReader(corruptPath)
+	if err != nil {
+		t.Logf("Corrupt file cannot even be opened: %v", err)
+		t.Log("POC CONFIRMED: WriteParquet would return normally, but the file is unreadable")
+		return
+	}
+
+	_, readerErr := reader.NewParquetReader(corruptReader, schema, 1)
+	corruptReader.Close()
+
+	if readerErr != nil {
+		t.Logf("Corrupt file has no valid footer: %v", readerErr)
+		t.Log("POC CONFIRMED: WriteParquet would return normally, but the Parquet file has no valid footer")
+	} else {
+		t.Fatal("Expected corrupt parquet file to be unreadable, but reader succeeded — hypothesis not demonstrated")
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestWriteParquetFooterErrorSwallowed
+    data_integrity_poc_test.go:62: Baseline: valid Parquet file with 1 row produced and verified
+    data_integrity_poc_test.go:99: WriteStop() returned error (as expected): write /var/folders/wz/c3l_zq0s6qscqln_qh5s00240000gn/T/TestWriteParquetFooterErrorSwallowed3600538123/002/corrupt.parquet: file already closed
+    data_integrity_poc_test.go:100: In production, `defer writer.WriteStop()` silently discards this error
+    data_integrity_poc_test.go:114: Corrupt file has no valid footer: seek /var/folders/wz/c3l_zq0s6qscqln_qh5s00240000gn/T/TestWriteParquetFooterErrorSwallowed3600538123/002/corrupt.parquet: invalid argument
+    data_integrity_poc_test.go:115: POC CONFIRMED: WriteParquet would return normally, but the Parquet file has no valid footer
+--- PASS: TestWriteParquetFooterErrorSwallowed (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/cmd	2.097s
+```
