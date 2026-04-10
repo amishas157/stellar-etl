@@ -92,3 +92,163 @@ This affects **four entity types** (Account, AccountSigner, Trustline, Offer), m
 - **Setup**: Construct a minimal `xdr.LedgerEntry` for an account (or any of the four types) with no sponsor extension. Also construct one with a valid sponsor.
 - **Steps**: Call the appropriate `Transform*()` function for both entries. Then call `.ToParquet()` on each result. Compare the `Sponsor` field.
 - **Assertion**: The unsponsored JSON output should have `Sponsor.Valid == false` (JSON null). The Parquet output should show that `Sponsor == ""`, which is indistinguishable from a legitimate empty string, demonstrating the null collapse. A sponsored entry should show the correct `G...` address in both formats. The test proves the Parquet format loses the null/present distinction that the JSON format preserves.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestParquetCollapsesNullSponsorToEmptyString"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs output structs for all four affected entity types (Account, AccountSigner, Trustline, Offer) with `Sponsor: null.String{}` (Valid=false, representing unsponsored entries). It verifies that JSON serialization correctly produces `null`, then calls `ToParquet()` and confirms the Parquet output collapses the null to `""`. All four subtests fire the NULL COLLAPSE CONFIRMED error, proving the Parquet format loses null semantics across every affected entity type. A sponsored Account subtest confirms valid sponsors are preserved correctly.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"encoding/json"
+	"testing"
+	"time"
+
+	"github.com/guregu/null"
+)
+
+// TestParquetCollapsesNullSponsorToEmptyString demonstrates that unsponsored
+// ledger entries (Account, AccountSigner, Trustline, Offer) lose their null
+// semantics when converted to Parquet: null.String{Valid:false} becomes "".
+func TestParquetCollapsesNullSponsorToEmptyString(t *testing.T) {
+	sponsorAddress := "GBADGWKHSUFOC4C7E3KXKINZSRX5KPHUWHH67UGJU77LEORGVLQ3BN3B"
+	now := time.Now()
+
+	// --- Account ---
+	t.Run("Account_unsponsored", func(t *testing.T) {
+		ao := AccountOutput{
+			AccountID: "GABC",
+			Sponsor:   null.String{}, // unsponsored: Valid=false
+			ClosedAt:  now,
+		}
+
+		// JSON preserves null
+		jsonBytes, _ := json.Marshal(ao.Sponsor)
+		if string(jsonBytes) != "null" {
+			t.Fatalf("JSON should serialize unsponsored Sponsor as null, got %s", string(jsonBytes))
+		}
+
+		// Parquet collapses to ""
+		parquet := ao.ToParquet().(AccountOutputParquet)
+		if parquet.Sponsor != "" {
+			t.Fatalf("expected Parquet Sponsor to be empty string for unsponsored account, got %q", parquet.Sponsor)
+		}
+
+		// The bug: Parquet cannot distinguish unsponsored ("") from a hypothetical empty sponsor
+		if ao.Sponsor.Valid == false && parquet.Sponsor == "" {
+			t.Errorf("NULL COLLAPSE CONFIRMED: Account JSON Sponsor is null (Valid=%v), but Parquet Sponsor is %q — null semantics lost",
+				ao.Sponsor.Valid, parquet.Sponsor)
+		}
+	})
+
+	t.Run("Account_sponsored", func(t *testing.T) {
+		ao := AccountOutput{
+			AccountID: "GABC",
+			Sponsor:   null.StringFrom(sponsorAddress),
+			ClosedAt:  now,
+		}
+
+		parquet := ao.ToParquet().(AccountOutputParquet)
+		if parquet.Sponsor != sponsorAddress {
+			t.Errorf("sponsored Account Parquet Sponsor should be %s, got %s", sponsorAddress, parquet.Sponsor)
+		}
+	})
+
+	// --- AccountSigner ---
+	t.Run("AccountSigner_unsponsored", func(t *testing.T) {
+		aso := AccountSignerOutput{
+			AccountID: "GABC",
+			Signer:    "GDEF",
+			Sponsor:   null.String{}, // unsponsored
+			ClosedAt:  now,
+		}
+
+		jsonBytes, _ := json.Marshal(aso.Sponsor)
+		if string(jsonBytes) != "null" {
+			t.Fatalf("JSON should serialize unsponsored Sponsor as null, got %s", string(jsonBytes))
+		}
+
+		parquet := aso.ToParquet().(AccountSignerOutputParquet)
+		if aso.Sponsor.Valid == false && parquet.Sponsor == "" {
+			t.Errorf("NULL COLLAPSE CONFIRMED: AccountSigner JSON Sponsor is null (Valid=%v), but Parquet Sponsor is %q — null semantics lost",
+				aso.Sponsor.Valid, parquet.Sponsor)
+		}
+	})
+
+	// --- Trustline ---
+	t.Run("Trustline_unsponsored", func(t *testing.T) {
+		tlo := TrustlineOutput{
+			AccountID: "GABC",
+			Sponsor:   null.String{}, // unsponsored
+			ClosedAt:  now,
+		}
+
+		jsonBytes, _ := json.Marshal(tlo.Sponsor)
+		if string(jsonBytes) != "null" {
+			t.Fatalf("JSON should serialize unsponsored Sponsor as null, got %s", string(jsonBytes))
+		}
+
+		parquet := tlo.ToParquet().(TrustlineOutputParquet)
+		if tlo.Sponsor.Valid == false && parquet.Sponsor == "" {
+			t.Errorf("NULL COLLAPSE CONFIRMED: Trustline JSON Sponsor is null (Valid=%v), but Parquet Sponsor is %q — null semantics lost",
+				tlo.Sponsor.Valid, parquet.Sponsor)
+		}
+	})
+
+	// --- Offer ---
+	t.Run("Offer_unsponsored", func(t *testing.T) {
+		oo := OfferOutput{
+			SellerID: "GABC",
+			Sponsor:  null.String{}, // unsponsored
+			ClosedAt: now,
+		}
+
+		jsonBytes, _ := json.Marshal(oo.Sponsor)
+		if string(jsonBytes) != "null" {
+			t.Fatalf("JSON should serialize unsponsored Sponsor as null, got %s", string(jsonBytes))
+		}
+
+		parquet := oo.ToParquet().(OfferOutputParquet)
+		if oo.Sponsor.Valid == false && parquet.Sponsor == "" {
+			t.Errorf("NULL COLLAPSE CONFIRMED: Offer JSON Sponsor is null (Valid=%v), but Parquet Sponsor is %q — null semantics lost",
+				oo.Sponsor.Valid, parquet.Sponsor)
+		}
+	})
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestParquetCollapsesNullSponsorToEmptyString
+=== RUN   TestParquetCollapsesNullSponsorToEmptyString/Account_unsponsored
+    data_integrity_poc_test.go:40: NULL COLLAPSE CONFIRMED: Account JSON Sponsor is null (Valid=false), but Parquet Sponsor is "" — null semantics lost
+=== RUN   TestParquetCollapsesNullSponsorToEmptyString/Account_sponsored
+=== RUN   TestParquetCollapsesNullSponsorToEmptyString/AccountSigner_unsponsored
+    data_integrity_poc_test.go:74: NULL COLLAPSE CONFIRMED: AccountSigner JSON Sponsor is null (Valid=false), but Parquet Sponsor is "" — null semantics lost
+=== RUN   TestParquetCollapsesNullSponsorToEmptyString/Trustline_unsponsored
+    data_integrity_poc_test.go:94: NULL COLLAPSE CONFIRMED: Trustline JSON Sponsor is null (Valid=false), but Parquet Sponsor is "" — null semantics lost
+=== RUN   TestParquetCollapsesNullSponsorToEmptyString/Offer_unsponsored
+    data_integrity_poc_test.go:114: NULL COLLAPSE CONFIRMED: Offer JSON Sponsor is null (Valid=false), but Parquet Sponsor is "" — null semantics lost
+--- FAIL: TestParquetCollapsesNullSponsorToEmptyString (0.00s)
+    --- FAIL: TestParquetCollapsesNullSponsorToEmptyString/Account_unsponsored (0.00s)
+    --- PASS: TestParquetCollapsesNullSponsorToEmptyString/Account_sponsored (0.00s)
+    --- FAIL: TestParquetCollapsesNullSponsorToEmptyString/AccountSigner_unsponsored (0.00s)
+    --- FAIL: TestParquetCollapsesNullSponsorToEmptyString/Trustline_unsponsored (0.00s)
+    --- FAIL: TestParquetCollapsesNullSponsorToEmptyString/Offer_unsponsored (0.00s)
+FAIL
+```
