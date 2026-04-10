@@ -73,3 +73,81 @@ The JSON output path is unaffected — only the Parquet serialization is broken.
 - **Setup**: Use existing test fixtures from `makeContractEventTestInput()` that produce operation-scoped events
 - **Steps**: Call `TransformContractEvent()` to get the JSON output, verify `OperationID.Valid == true` and `OperationID.Int64 != 0` for an operation-scoped event, then call `.ToParquet()` on that same output
 - **Assertion**: Assert that the Parquet struct's `OperationID` field equals `0` (demonstrating the bug). The JSON struct's `OperationID.Int64` value should be non-zero (e.g., `131090201534537729`), but after `ToParquet()` the Parquet struct's `OperationID` will be `0`. Cast the `ToParquet()` return value to `ContractEventOutputParquet` and compare `parquetOutput.OperationID` against `jsonOutput.OperationID.Int64`.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestContractEventParquetDropsOperationID"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `ContractEventOutput` with a valid, non-zero `OperationID` (131090201534537729) representing an operation-scoped contract event, then calls `ToParquet()`. The resulting `ContractEventOutputParquet` struct has `OperationID = 0` because the converter at `parquet_converter.go:425-441` omits the `OperationID` field assignment entirely. This proves that every Parquet row silently loses its operation ID, breaking downstream joins and erasing event classification.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+
+	"github.com/guregu/null"
+)
+
+func TestContractEventParquetDropsOperationID(t *testing.T) {
+	// Construct a ContractEventOutput with a non-zero, valid OperationID
+	// simulating an operation-scoped contract event.
+	operationID := int64(131090201534537729)
+	jsonOutput := ContractEventOutput{
+		TransactionHash:          "abc123",
+		TransactionID:            131090201534537728,
+		Successful:               true,
+		LedgerSequence:           30521816,
+		InSuccessfulContractCall: true,
+		ContractId:               "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+		Type:                     1,
+		TypeString:               "ContractEventTypeContract",
+		ContractEventXDR:         "deadbeef",
+		OperationID:              null.IntFrom(operationID),
+	}
+
+	// Verify the JSON struct has the correct OperationID
+	if !jsonOutput.OperationID.Valid {
+		t.Fatal("precondition failed: JSON output OperationID should be valid")
+	}
+	if jsonOutput.OperationID.Int64 != operationID {
+		t.Fatalf("precondition failed: JSON output OperationID = %d, want %d",
+			jsonOutput.OperationID.Int64, operationID)
+	}
+
+	// Convert to Parquet
+	parquetRaw := jsonOutput.ToParquet()
+	parquetOutput, ok := parquetRaw.(ContractEventOutputParquet)
+	if !ok {
+		t.Fatal("ToParquet() did not return ContractEventOutputParquet")
+	}
+
+	// The bug: Parquet OperationID should match the JSON OperationID,
+	// but the converter omits it, so it defaults to 0.
+	if parquetOutput.OperationID != operationID {
+		t.Errorf("OperationID corrupted in Parquet: got %d, want %d (non-zero operation ID lost)",
+			parquetOutput.OperationID, operationID)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestContractEventParquetDropsOperationID
+    data_integrity_poc_test.go:45: OperationID corrupted in Parquet: got 0, want 131090201534537729 (non-zero operation ID lost)
+--- FAIL: TestContractEventParquetDropsOperationID (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.837s
+```
