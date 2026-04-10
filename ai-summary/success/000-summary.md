@@ -22,3 +22,4 @@
 - `export-pipeline/009-sep41-custom-token-amounts-scaled-as-stroops.md` — Critical — custom SEP-41 token transfers divide raw contract amounts by `10^7` and export silently wrong monetary values
 - `data-transform/002-contract-event-parquet-operation-id-dropped.md` — High — contract event Parquet conversion zeroes populated `operation_id` values
 - `data-transform/003-transaction-parquet-zeroes-absent-min-account-sequence.md` — High — transaction Parquet export encodes absent `min_account_sequence` as `0`, collapsing it with explicit `min_account_sequence=0`
+- `export-pipeline/010-trade-limit-counts-operations-before-trades.md` — High — `export_trades --limit` counts trade-capable operations before emitted trade rows and can return empty or truncated exports
