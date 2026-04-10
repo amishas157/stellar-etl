@@ -33,3 +33,31 @@ Unlike the one-shot export commands, `export_ledger_entry_changes` loops forever
 ## Anti-Evidence
 
 Short local runs may finish before exhausting the process's descriptor limit, which makes this easy to miss in existing tests. The bug becomes meaningful on sustained or high-cardinality exports where the command is expected to keep writing future batches.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-10
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of ai-summary/success/cli-commands/004-ledger-entry-changes-leaks-file-descriptors.md.gh-published
+**Failed At**: reviewer
+
+### Trace Summary
+
+This hypothesis describes the exact same file descriptor leak that was already confirmed, PoC-tested, and published as success finding 004. The success finding documents the same root cause (`exportTransformedData` never closing `outFile` from `MustOutFile`, plus `createOutputFile` discarding the `*os.File` from `os.Create`), the same affected code paths, the same trigger scenario, and the same severity. A prior review (fail/006) also identified this as a duplicate.
+
+### Code Paths Examined
+
+- `cmd/command_utils.go:createOutputFile:19-28` — confirmed `os.Create()` return value discarded without close (identical to 004)
+- `cmd/command_utils.go:MustOutFile:31-52` — confirmed returns `*os.File` that caller never closes (identical to 004)
+- `cmd/export_ledger_entry_changes.go:exportTransformedData:295-377` — confirmed `outFile` opened at line 311 is never closed (identical to 004)
+
+### Why It Failed
+
+This is a duplicate of the already-confirmed and published finding `ai-summary/success/cli-commands/004-ledger-entry-changes-leaks-file-descriptors.md.gh-published`. The success finding covers the identical root cause, identical affected code paths, identical trigger conditions, and identical severity assessment. Additionally, a prior review of this same hypothesis already exists at `ai-summary/fail/cli-commands/006-ledger-entry-change-file-descriptors-leak-across-batches.md`.
+
+### Lesson Learned
+
+The file descriptor leak in `export_ledger_entry_changes` has been thoroughly investigated, confirmed, and published. Hypothesis generators should check both the success directory and existing fail reviews before re-proposing known issues.
