@@ -17,5 +17,6 @@
 - `export-pipeline/004-muxed-soroban-fee-balance-mismatch.md` — Critical — muxed Soroban fee accounts export negative inclusion fees and zero refunds by matching `M...` addresses against ledger `G...` entries
 - `export-pipeline/005-config-ledger-cost-ext-drops-footprint-cap.md` — High — config-setting export drops `tx_max_footprint_entries` from `CONTRACT_LEDGER_COST_EXT_V0`
 - `export-pipeline/006-config-scp-timing-exports-empty-shell.md` — High — `CONFIG_SETTING_SCP_TIMING` exports a metadata-only row and drops all five timing parameters
+- `export-pipeline/007-json-exporters-ignore-close-failures.md` — Medium — one-shot JSON export commands ignore writable file `Close()` errors and still report success before optional upload
 - `data-transform/002-contract-event-parquet-operation-id-dropped.md` — High — contract event Parquet conversion zeroes populated `operation_id` values
 - `data-transform/003-transaction-parquet-zeroes-absent-min-account-sequence.md` — High — transaction Parquet export encodes absent `min_account_sequence` as `0`, collapsing it with explicit `min_account_sequence=0`
