@@ -71,3 +71,98 @@ This causes distinct offer states to be incorrectly collapsed in the normalized 
 - **Setup**: Create two `ingest.Change` objects for the same `OfferID` with amounts differing by 1 stroop (e.g., `Amount: 10000001` and `Amount: 10000002`). Use identical selling/buying assets and price.
 - **Steps**: Call `TransformOfferNormalized` on each change. Extract `DimOfferID` from both results.
 - **Assertion**: Assert that the two `DimOfferID` values are different (`assert.NotEqual`). Currently this will FAIL because both produce the same hash, confirming the bug. The fix would be to use `%.7f` (or a stroop-aware integer format) in the `Sprintf` call at `offer_normalized.go:140`.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestDimOfferIDCollision_SingleStroopDifference"
+**Test Language**: Go
+
+### Demonstration
+
+The test creates two `ingest.Change` objects for the same OfferID (12345) with amounts differing by 1 stroop (10000001 vs 10000002). After `TransformOfferNormalized`, both produce the identical `DimOfferID=4586906745675598928` because `fmt.Sprintf("%d/%f/%f", ...)` truncates both `1.0000001` and `1.0000002` to `"1.000000"` before FNV hashing. This proves distinct offer states are silently collapsed into the same dimension key.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/ingest"
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestDimOfferIDCollision_SingleStroopDifference demonstrates that two offer
+// states differing by 1 stroop produce the same DimOfferID because
+// extractDimOffer uses fmt.Sprintf("%f") which truncates at 6 decimal places,
+// losing the 7th-digit stroop precision.
+func TestDimOfferIDCollision_SingleStroopDifference(t *testing.T) {
+	// Two amounts that differ by 1 stroop:
+	//   10000001 stroops → 1.0000001 XLM → %f → "1.000000"
+	//   10000002 stroops → 1.0000002 XLM → %f → "1.000000"
+	amount1 := xdr.Int64(10000001)
+	amount2 := xdr.Int64(10000002)
+
+	makeChange := func(amount xdr.Int64) ingest.Change {
+		return ingest.Change{
+			ChangeType: xdr.LedgerEntryChangeTypeLedgerEntryCreated,
+			Type:       xdr.LedgerEntryTypeOffer,
+			Pre:        nil,
+			Post: &xdr.LedgerEntry{
+				LastModifiedLedgerSeq: xdr.Uint32(100),
+				Data: xdr.LedgerEntryData{
+					Type: xdr.LedgerEntryTypeOffer,
+					Offer: &xdr.OfferEntry{
+						SellerId: testAccount1ID,
+						OfferId:  12345,
+						Selling:  nativeAsset,
+						Buying:   ethAsset,
+						Amount:   amount,
+						Price:    xdr.Price{N: 1, D: 1},
+						Flags:    0,
+					},
+				},
+			},
+		}
+	}
+
+	change1 := makeChange(amount1)
+	change2 := makeChange(amount2)
+
+	result1, err := TransformOfferNormalized(change1, 100)
+	if err != nil {
+		t.Fatalf("TransformOfferNormalized(amount=%d) error: %v", amount1, err)
+	}
+
+	result2, err := TransformOfferNormalized(change2, 100)
+	if err != nil {
+		t.Fatalf("TransformOfferNormalized(amount=%d) error: %v", amount2, err)
+	}
+
+	// The amounts are different, so DimOfferID should be different.
+	// BUG: Both produce DimOfferID from hash of "12345/1.000000/1.000000"
+	// because %f truncates to 6 decimal places, losing the 7th digit.
+	if result1.Offer.DimOfferID == result2.Offer.DimOfferID {
+		t.Errorf("DimOfferID collision: two distinct offer states (amount=%d vs amount=%d) "+
+			"produce the same DimOfferID=%d. The 7th stroop digit is lost by %%f formatting.",
+			amount1, amount2, result1.Offer.DimOfferID)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestDimOfferIDCollision_SingleStroopDifference
+    data_integrity_poc_test.go:61: DimOfferID collision: two distinct offer states (amount=10000001 vs amount=10000002) produce the same DimOfferID=4586906745675598928. The 7th stroop digit is lost by %f formatting.
+--- FAIL: TestDimOfferIDCollision_SingleStroopDifference (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.691s
+```
