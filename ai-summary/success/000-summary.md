@@ -1,0 +1,1 @@
+- `data-integrity/001-dim-offer-id-collision.md` — High — `DimOfferID` rounds away one-stroop offer updates and collapses normalized offer states
