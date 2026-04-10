@@ -70,3 +70,139 @@ Note: `ExtraSigners` (a separate precondition field) IS correctly carried throug
 - **Setup**: Use an existing transaction test fixture that produces a `TransactionOutput` with a non-empty `TxSigners` slice
 - **Steps**: Call `TransformTransaction()` to get a `TransactionOutput`, then call `.ToParquet()` on the result and cast to `TransactionOutputParquet`
 - **Assertion**: Verify that the `TransactionOutputParquet` struct has no `TxSigners` field (compile-time check) — or more practically, compare the JSON-marshalled output of both structs and show that `tx_signers` is present in JSON but absent from Parquet. A field-count comparison between `TransactionOutput` and `TransactionOutputParquet` would also demonstrate the mismatch.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestParquetDropsTxSigners"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `TransactionOutput` with two signers in `TxSigners`, verifies they appear in JSON-marshalled output, then calls `ToParquet()` and confirms the resulting `TransactionOutputParquet` struct has no `TxSigners` field via reflection and no signer data in its JSON representation. This proves every Parquet export silently drops all transaction signer data.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"encoding/json"
+	"reflect"
+	"testing"
+	"time"
+
+	"github.com/guregu/null"
+)
+
+// TestParquetDropsTxSigners demonstrates that TransactionOutputParquet
+// silently drops the TxSigners field present in TransactionOutput.
+// The JSON output includes tx_signers; the Parquet struct omits it entirely.
+func TestParquetDropsTxSigners(t *testing.T) {
+	// 1. Construct a TransactionOutput with non-empty TxSigners
+	txOutput := TransactionOutput{
+		TransactionHash: "abc123",
+		LedgerSequence:  100,
+		Account:         "GABC",
+		AccountSequence: 1,
+		MaxFee:          100,
+		FeeCharged:      50,
+		OperationCount:  1,
+		TxEnvelope:      "env",
+		TxResult:        "res",
+		TxMeta:          "meta",
+		TxFeeMeta:       "feemeta",
+		CreatedAt:       time.Unix(1000, 0),
+		MemoType:        "none",
+		TimeBounds:      "",
+		Successful:      true,
+		TransactionID:   42,
+		MinAccountSequence:          null.IntFrom(0),
+		MinAccountSequenceAge:       null.IntFrom(0),
+		MinAccountSequenceLedgerGap: null.IntFrom(0),
+		ClosedAt:                    time.Unix(1000, 0),
+		TxSigners:                   []string{"GABC...SIGNER1", "GDEF...SIGNER2"},
+	}
+
+	// 2. Verify TxSigners is present in JSON output
+	jsonBytes, err := json.Marshal(txOutput)
+	if err != nil {
+		t.Fatalf("Failed to marshal TransactionOutput to JSON: %v", err)
+	}
+	var jsonMap map[string]interface{}
+	if err := json.Unmarshal(jsonBytes, &jsonMap); err != nil {
+		t.Fatalf("Failed to unmarshal JSON: %v", err)
+	}
+	signers, hasTxSigners := jsonMap["tx_signers"]
+	if !hasTxSigners {
+		t.Fatal("tx_signers missing from JSON output — test setup is wrong")
+	}
+	signerList, ok := signers.([]interface{})
+	if !ok || len(signerList) != 2 {
+		t.Fatalf("Expected 2 tx_signers in JSON, got %v", signers)
+	}
+
+	// 3. Convert to Parquet and check for TxSigners field
+	parquetResult := txOutput.ToParquet()
+	parquetType := reflect.TypeOf(parquetResult)
+
+	// The Parquet struct should have a TxSigners field if signers are preserved.
+	// This demonstrates the field is structurally absent.
+	_, hasTxSignersField := parquetType.FieldByName("TxSigners")
+
+	// 4. Also marshal the Parquet struct to JSON to show the data loss
+	parquetBytes, err := json.Marshal(parquetResult)
+	if err != nil {
+		t.Fatalf("Failed to marshal Parquet struct to JSON: %v", err)
+	}
+	var parquetMap map[string]interface{}
+	if err := json.Unmarshal(parquetBytes, &parquetMap); err != nil {
+		t.Fatalf("Failed to unmarshal Parquet JSON: %v", err)
+	}
+
+	// Check that no key in the Parquet JSON output contains signer data
+	_, parquetHasSigners := parquetMap["tx_signers"]
+	_, parquetHasSigners2 := parquetMap["TxSigners"]
+
+	// --- Assertions ---
+	// The Parquet struct has no TxSigners field at all
+	if hasTxSignersField {
+		t.Error("UNEXPECTED: TransactionOutputParquet has a TxSigners field — hypothesis would be disproven")
+	} else {
+		t.Log("CONFIRMED: TransactionOutputParquet struct has NO TxSigners field")
+	}
+
+	// The Parquet JSON output has no signer data
+	if parquetHasSigners || parquetHasSigners2 {
+		t.Error("UNEXPECTED: Parquet JSON output contains signer data")
+	} else {
+		t.Log("CONFIRMED: Parquet JSON output contains no tx_signers data")
+	}
+
+	// The JSON output has signer data but Parquet does not — data loss proven
+	if hasTxSigners && !parquetHasSigners && !hasTxSignersField {
+		t.Log("BUG DEMONSTRATED: TransactionOutput.TxSigners is populated with 2 signers, " +
+			"JSON output includes tx_signers, but ToParquet() produces a struct with no TxSigners field. " +
+			"Parquet exports silently drop all transaction signer data.")
+	} else {
+		t.Error("Could not demonstrate the data loss bug")
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestParquetDropsTxSigners
+    data_integrity_poc_test.go:86: CONFIRMED: TransactionOutputParquet struct has NO TxSigners field
+    data_integrity_poc_test.go:93: CONFIRMED: Parquet JSON output contains no tx_signers data
+    data_integrity_poc_test.go:98: BUG DEMONSTRATED: TransactionOutput.TxSigners is populated with 2 signers, JSON output includes tx_signers, but ToParquet() produces a struct with no TxSigners field. Parquet exports silently drop all transaction signer data.
+--- PASS: TestParquetDropsTxSigners (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.683s
+```
