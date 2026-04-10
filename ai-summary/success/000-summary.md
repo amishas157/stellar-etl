@@ -10,3 +10,4 @@
 - `cli-commands/001-parquet-upload-before-write-breaks-parquet-export.md` — Medium — four export commands try to upload the parquet artifact before generating it, causing partial exports when cloud upload is enabled
 - `cli-commands/002-export-entry-swallows-write-errors.md` — Medium — `ExportEntry` logs failed JSON writes but returns `nil`, so exporters count truncated rows as successful
 - `cli-commands/003-restored-key-parquet-path-missing.md` — High — `export_ledger_entry_changes --export-restored-keys --write-parquet` emits a zero-row parquet file while JSON contains restored-key data
+- `cli-commands/004-ledger-entry-changes-leaks-file-descriptors.md` — Medium — `export_ledger_entry_changes` leaks two file descriptors per new batch/resource output and can stop later exports at the OS FD limit
