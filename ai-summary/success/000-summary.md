@@ -28,3 +28,4 @@
 - `data-transform/005-trade-parquet-drops-liquidity-pool-strkey.md` — High — trade Parquet export drops populated `selling_liquidity_pool_id_strkey` for liquidity-pool trades
 - `data-transform/006-contract-data-parquet-drops-ledger-key-hash-base64.md` — High — contract-data Parquet export drops populated `ledger_key_hash_base_64` from every non-nonce row
 - `data-transform/007-contract-code-parquet-drops-ledger-key-hash-base64.md` — High — contract-code Parquet export drops populated `ledger_key_hash_base_64` from every contract-code row
+- `data-input/001-export-ledgers-captive-core-drops-soroban-lcm-fields.md` — High — `export_ledgers --captive-core` routes through a history-archive reader that omits `LedgerCloseMeta`, silently zeroing Soroban ledger fields
