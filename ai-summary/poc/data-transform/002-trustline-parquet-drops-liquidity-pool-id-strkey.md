@@ -69,3 +69,86 @@ The impact is that any downstream consumer reading Parquet exports (e.g., BigQue
 - **Setup**: Construct a `TrustlineOutput` with a non-empty `LiquidityPoolIDStrkey` value (e.g., `"LAAQGBAFA4EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2VM"` from the existing test fixture at `trustline_test.go:165`)
 - **Steps**: Call `trustlineOutput.ToParquet()` and type-assert the result to `TrustlineOutputParquet`
 - **Assertion**: Verify that `TrustlineOutputParquet` has no `LiquidityPoolIDStrkey` field (the struct itself lacks it), confirming the data is silently dropped. Use reflection to show the JSON struct has the field but the Parquet struct does not.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestTrustlineParquetDropsLiquidityPoolIDStrkey"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `TrustlineOutput` with `LiquidityPoolIDStrkey` set to the canonical L... strkey value used in existing test fixtures. It then calls `ToParquet()` and uses reflection to confirm that `TrustlineOutputParquet` has no `LiquidityPoolIDStrkey` field, while `TrustlineOutput` does. This proves that pool-share trustline Parquet exports silently drop the strkey identifier that JSON exports preserve.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"reflect"
+	"testing"
+)
+
+// TestTrustlineParquetDropsLiquidityPoolIDStrkey demonstrates that TrustlineOutputParquet
+// omits the LiquidityPoolIDStrkey field present in TrustlineOutput, causing pool-share
+// trustlines to silently lose their canonical L... strkey identifier in Parquet exports.
+func TestTrustlineParquetDropsLiquidityPoolIDStrkey(t *testing.T) {
+	// 1. Construct a TrustlineOutput with a populated LiquidityPoolIDStrkey
+	//    (value taken from existing test fixture in trustline_test.go:165)
+	input := TrustlineOutput{
+		LedgerKey:             "some-key",
+		AccountID:             "GCEODJVUQNK5ANUQ6SNQAT6UUXT4KSS2CJFUFSQFJ2RDJXT7YUVKZO",
+		AssetType:             "pool_share",
+		LiquidityPoolID:       "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+		LiquidityPoolIDStrkey: "LAAQGBAFA4EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2VM",
+	}
+
+	// 2. Verify the JSON struct has the field
+	jsonType := reflect.TypeOf(input)
+	_, hasStrkey := jsonType.FieldByName("LiquidityPoolIDStrkey")
+	if !hasStrkey {
+		t.Fatal("TrustlineOutput should have LiquidityPoolIDStrkey field")
+	}
+
+	// 3. Convert to Parquet via production code path
+	parquetResult := input.ToParquet()
+	parquetOutput, ok := parquetResult.(TrustlineOutputParquet)
+	if !ok {
+		t.Fatalf("ToParquet() returned unexpected type: %T", parquetResult)
+	}
+
+	// 4. Verify the Parquet struct does NOT have the LiquidityPoolIDStrkey field
+	parquetType := reflect.TypeOf(parquetOutput)
+	_, parquetHasStrkey := parquetType.FieldByName("LiquidityPoolIDStrkey")
+
+	if parquetHasStrkey {
+		t.Error("TrustlineOutputParquet unexpectedly has LiquidityPoolIDStrkey field — bug may be fixed")
+	} else {
+		t.Errorf("DATA LOSS CONFIRMED: TrustlineOutput has LiquidityPoolIDStrkey=%q "+
+			"but TrustlineOutputParquet has no such field — the value is silently dropped in Parquet exports",
+			input.LiquidityPoolIDStrkey)
+	}
+
+	// 5. Also verify hex LiquidityPoolID IS preserved (to show it's specifically the strkey that's lost)
+	if parquetOutput.LiquidityPoolID != input.LiquidityPoolID {
+		t.Errorf("LiquidityPoolID (hex) mismatch: got %q, want %q",
+			parquetOutput.LiquidityPoolID, input.LiquidityPoolID)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestTrustlineParquetDropsLiquidityPoolIDStrkey
+    data_integrity_poc_test.go:43: DATA LOSS CONFIRMED: TrustlineOutput has LiquidityPoolIDStrkey="LAAQGBAFA4EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2VM" but TrustlineOutputParquet has no such field — the value is silently dropped in Parquet exports
+--- FAIL: TestTrustlineParquetDropsLiquidityPoolIDStrkey (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.830s
+```
