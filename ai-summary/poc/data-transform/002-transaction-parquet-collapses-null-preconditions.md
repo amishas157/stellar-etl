@@ -77,3 +77,102 @@ This is a systemic pattern — the same null-collapsing issue affects at least 7
 - **Setup**: Create two `TransactionOutput` structs: one with `MinAccountSequenceAge: null.Int{}` (absent) and one with `MinAccountSequenceAge: null.IntFrom(0)` (explicitly zero).
 - **Steps**: Call `.ToParquet()` on both structs and compare the `MinAccountSequenceAge` field of the resulting Parquet structs.
 - **Assertion**: Assert that the two Parquet outputs are distinguishable. Currently they are both `0`, demonstrating the bug. The fix would use `*int64` pointer types in the Parquet schema with `repetitiontype=OPTIONAL`, setting `nil` for absent and `&zero` for explicit zero.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestParquetCollapsesNullPreconditions"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs two `TransactionOutput` structs that differ only in whether precondition fields are absent (`null.Int{}`, Valid=false) or explicitly zero (`null.IntFrom(0)`, Valid=true). After calling `.ToParquet()` on both, all three precondition fields (`MinAccountSequence`, `MinAccountSequenceAge`, `MinAccountSequenceLedgerGap`) produce identical `int64(0)` values, proving the Parquet conversion destroys the null/zero distinction that the JSON schema correctly preserves.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+	"time"
+
+	"github.com/guregu/null"
+)
+
+// TestParquetCollapsesNullPreconditions demonstrates that the Parquet
+// conversion of TransactionOutput collapses absent (null) precondition fields
+// and explicitly-zero precondition fields into the same value (0), losing the
+// distinction preserved by the JSON schema's null.Int type.
+func TestParquetCollapsesNullPreconditions(t *testing.T) {
+	// 1. Construct two TransactionOutput structs that differ only in
+	//    precondition null-ness.
+	absentPreconditions := TransactionOutput{
+		MinAccountSequence:          null.Int{},          // absent — Valid=false, Int64=0
+		MinAccountSequenceAge:       null.Int{},          // absent
+		MinAccountSequenceLedgerGap: null.Int{},          // absent
+		ClosedAt:                    time.Unix(0, 0).UTC(), // avoid nil-time panic
+	}
+
+	zeroPreconditions := TransactionOutput{
+		MinAccountSequence:          null.IntFrom(0), // explicitly zero — Valid=true, Int64=0
+		MinAccountSequenceAge:       null.IntFrom(0), // explicitly zero
+		MinAccountSequenceLedgerGap: null.IntFrom(0), // explicitly zero
+		ClosedAt:                    time.Unix(0, 0).UTC(),
+	}
+
+	// Confirm the JSON-level structs ARE distinguishable.
+	if absentPreconditions.MinAccountSequenceAge.Valid ==
+		zeroPreconditions.MinAccountSequenceAge.Valid {
+		t.Fatal("precondition: JSON structs should differ in .Valid")
+	}
+
+	// 2. Convert both to Parquet.
+	parquetAbsent := absentPreconditions.ToParquet().(TransactionOutputParquet)
+	parquetZero := zeroPreconditions.ToParquet().(TransactionOutputParquet)
+
+	// 3. Assert: the Parquet outputs should be distinguishable.
+	//    If they are NOT, the bug is demonstrated (POC_PASS).
+	bugsFound := 0
+
+	if parquetAbsent.MinAccountSequence == parquetZero.MinAccountSequence {
+		t.Errorf("MinAccountSequence: absent and explicit-zero both produce %d — indistinguishable in Parquet",
+			parquetAbsent.MinAccountSequence)
+		bugsFound++
+	}
+	if parquetAbsent.MinAccountSequenceAge == parquetZero.MinAccountSequenceAge {
+		t.Errorf("MinAccountSequenceAge: absent and explicit-zero both produce %d — indistinguishable in Parquet",
+			parquetAbsent.MinAccountSequenceAge)
+		bugsFound++
+	}
+	if parquetAbsent.MinAccountSequenceLedgerGap == parquetZero.MinAccountSequenceLedgerGap {
+		t.Errorf("MinAccountSequenceLedgerGap: absent and explicit-zero both produce %d — indistinguishable in Parquet",
+			parquetAbsent.MinAccountSequenceLedgerGap)
+		bugsFound++
+	}
+
+	if bugsFound == 0 {
+		t.Log("All three precondition fields are distinguishable — no bug found")
+	} else {
+		t.Logf("Bug demonstrated: %d/3 precondition fields collapse null to zero in Parquet", bugsFound)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestParquetCollapsesNullPreconditions
+    data_integrity_poc_test.go:46: MinAccountSequence: absent and explicit-zero both produce 0 — indistinguishable in Parquet
+    data_integrity_poc_test.go:51: MinAccountSequenceAge: absent and explicit-zero both produce 0 — indistinguishable in Parquet
+    data_integrity_poc_test.go:56: MinAccountSequenceLedgerGap: absent and explicit-zero both produce 0 — indistinguishable in Parquet
+    data_integrity_poc_test.go:64: Bug demonstrated: 3/3 precondition fields collapse null to zero in Parquet
+--- FAIL: TestParquetCollapsesNullPreconditions (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.906s
+```
