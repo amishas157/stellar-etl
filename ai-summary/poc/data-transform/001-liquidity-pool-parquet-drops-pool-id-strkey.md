@@ -68,3 +68,85 @@ The impact is that any downstream consumer reading Parquet exports (e.g., BigQue
 - **Setup**: Construct a `PoolOutput` with a non-empty `PoolIDStrkey` value (e.g., `"LALS2QYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC2X"` from the existing test fixture)
 - **Steps**: Call `poolOutput.ToParquet()` and type-assert the result to `PoolOutputParquet`
 - **Assertion**: Verify that `PoolOutputParquet` has no `PoolIDStrkey` field (the struct itself lacks it), confirming the data is silently dropped. Alternatively, compare the field count or use reflection to show the JSON struct has the field but the Parquet struct does not.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestPoolOutputParquetDropsPoolIDStrkey"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `PoolOutput` with `PoolIDStrkey` set to the canonical `L...` strkey value, calls `ToParquet()`, and uses reflection to confirm that `PoolOutputParquet` has no `PoolIDStrkey` field. The JSON struct (`PoolOutput`) has 21 fields while the Parquet struct (`PoolOutputParquet`) has only 20 fields — `PoolIDStrkey` is silently dropped during Parquet conversion, confirming the schema parity bug.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"reflect"
+	"testing"
+)
+
+// TestPoolOutputParquetDropsPoolIDStrkey demonstrates that the Parquet schema
+// for liquidity pools silently drops the PoolIDStrkey field that the JSON
+// schema populates. When a PoolOutput with a non-empty PoolIDStrkey is
+// converted to Parquet via ToParquet(), the resulting PoolOutputParquet struct
+// has no field to hold the value, so it is lost.
+func TestPoolOutputParquetDropsPoolIDStrkey(t *testing.T) {
+	// 1. Construct a PoolOutput with a populated PoolIDStrkey
+	po := PoolOutput{
+		PoolID:       "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+		PoolIDStrkey: "LALS2QYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC2X",
+	}
+
+	// Verify JSON struct has the PoolIDStrkey field
+	jsonType := reflect.TypeOf(po)
+	_, hasFieldInJSON := jsonType.FieldByName("PoolIDStrkey")
+	if !hasFieldInJSON {
+		t.Fatal("PoolOutput should have PoolIDStrkey field")
+	}
+
+	// 2. Convert to Parquet
+	parquetResult := po.ToParquet()
+	parquetPool, ok := parquetResult.(PoolOutputParquet)
+	if !ok {
+		t.Fatalf("ToParquet() returned unexpected type: %T", parquetResult)
+	}
+
+	// 3. Verify Parquet struct has NO PoolIDStrkey field — the data is dropped
+	parquetType := reflect.TypeOf(parquetPool)
+	_, hasFieldInParquet := parquetType.FieldByName("PoolIDStrkey")
+	if hasFieldInParquet {
+		t.Fatal("PoolOutputParquet unexpectedly has PoolIDStrkey field — bug may be fixed")
+	}
+
+	// 4. Count field mismatch: JSON struct has more fields than Parquet struct
+	jsonFieldCount := jsonType.NumField()
+	parquetFieldCount := parquetType.NumField()
+	if jsonFieldCount <= parquetFieldCount {
+		t.Fatalf("Expected JSON struct to have more fields than Parquet struct, got JSON=%d Parquet=%d",
+			jsonFieldCount, parquetFieldCount)
+	}
+
+	t.Logf("BUG CONFIRMED: PoolOutput has %d fields (including PoolIDStrkey='%s'), "+
+		"but PoolOutputParquet has only %d fields — PoolIDStrkey is silently dropped in Parquet export",
+		jsonFieldCount, po.PoolIDStrkey, parquetFieldCount)
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestPoolOutputParquetDropsPoolIDStrkey
+    data_integrity_poc_test.go:49: BUG CONFIRMED: PoolOutput has 21 fields (including PoolIDStrkey='LALS2QYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC2X'), but PoolOutputParquet has only 20 fields — PoolIDStrkey is silently dropped in Parquet export
+--- PASS: TestPoolOutputParquetDropsPoolIDStrkey (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.886s
+```
