@@ -19,5 +19,6 @@
 - `export-pipeline/006-config-scp-timing-exports-empty-shell.md` — High — `CONFIG_SETTING_SCP_TIMING` exports a metadata-only row and drops all five timing parameters
 - `export-pipeline/007-json-exporters-ignore-close-failures.md` — Medium — one-shot JSON export commands ignore writable file `Close()` errors and still report success before optional upload
 - `export-pipeline/008-parquet-finalization-errors-are-swallowed.md` — Medium — `WriteParquet()` ignores `WriteStop()` and `Close()` failures, so callers can keep or upload corrupt parquet artifacts
+- `export-pipeline/009-sep41-custom-token-amounts-scaled-as-stroops.md` — Critical — custom SEP-41 token transfers divide raw contract amounts by `10^7` and export silently wrong monetary values
 - `data-transform/002-contract-event-parquet-operation-id-dropped.md` — High — contract event Parquet conversion zeroes populated `operation_id` values
 - `data-transform/003-transaction-parquet-zeroes-absent-min-account-sequence.md` — High — transaction Parquet export encodes absent `min_account_sequence` as `0`, collapsing it with explicit `min_account_sequence=0`
