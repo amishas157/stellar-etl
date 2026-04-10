@@ -71,3 +71,90 @@ Additionally, the same bug exists for `ContractDataOutput`: `schema.go:536` decl
 - **Setup**: Use the existing test infrastructure that constructs a `ContractCodeOutput` with a populated `LedgerKeyHashBase64` field (see line 123 of existing tests)
 - **Steps**: Call `ToParquet()` on a `ContractCodeOutput` that has `LedgerKeyHashBase64` set to a non-empty string. Cast the result to `ContractCodeOutputParquet`. Verify via reflection or by checking that the Parquet struct has no `LedgerKeyHashBase64` field (demonstrating the field is dropped).
 - **Assertion**: Assert that the Parquet struct type does NOT contain a `LedgerKeyHashBase64` field (confirming the schema gap), OR assert that after round-tripping through Parquet write/read the base64 value is lost while the hex hash is preserved.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestContractCodeParquetDropsLedgerKeyHashBase64"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `ContractCodeOutput` with `LedgerKeyHashBase64` set to a known non-empty value, then calls `ToParquet()` and uses reflection to confirm the resulting `ContractCodeOutputParquet` struct has no `LedgerKeyHashBase64` field. This proves the Parquet schema silently drops the base64 ledger key hash that the JSON schema includes, causing deterministic data loss on every contract-code row exported via the Parquet path.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"reflect"
+	"testing"
+	"time"
+)
+
+// TestContractCodeParquetDropsLedgerKeyHashBase64 demonstrates that
+// ContractCodeOutput.ToParquet() silently drops the LedgerKeyHashBase64 field.
+// The JSON schema includes this field, but the Parquet schema and converter omit it.
+func TestContractCodeParquetDropsLedgerKeyHashBase64(t *testing.T) {
+	// 1. Construct a ContractCodeOutput with a populated LedgerKeyHashBase64
+	input := ContractCodeOutput{
+		ContractCodeHash:    "0000000000000000000000000000000000000000000000000000000000000000",
+		ContractCodeExtV:    1,
+		LastModifiedLedger:  24229503,
+		LedgerEntryChange:   1,
+		Deleted:             false,
+		LedgerSequence:      10,
+		ClosedAt:            time.Date(1970, time.January, 1, 0, 16, 40, 0, time.UTC),
+		LedgerKeyHash:       "dfed061dbe464e0ff320744fcd604ac08b39daa74fa24110936654cbcb915ccc",
+		NInstructions:       1,
+		NFunctions:          2,
+		NGlobals:            3,
+		NTableEntries:       4,
+		NTypes:              5,
+		NDataSegments:       6,
+		NElemSegments:       7,
+		NImports:            8,
+		NExports:            9,
+		NDataSegmentBytes:   10,
+		LedgerKeyHashBase64: "AAAABwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+	}
+
+	// Verify the input field is populated
+	if input.LedgerKeyHashBase64 == "" {
+		t.Fatal("precondition failed: LedgerKeyHashBase64 should be non-empty")
+	}
+
+	// 2. Convert to Parquet via the production code path
+	parquetResult := input.ToParquet()
+
+	// 3. Assert the Parquet struct does NOT have a LedgerKeyHashBase64 field,
+	//    demonstrating the field is silently dropped during conversion.
+	parquetType := reflect.TypeOf(parquetResult)
+	_, hasField := parquetType.FieldByName("LedgerKeyHashBase64")
+
+	if hasField {
+		t.Error("LedgerKeyHashBase64 exists in Parquet struct — hypothesis not confirmed")
+	} else {
+		t.Errorf("BUG CONFIRMED: ContractCodeOutputParquet is missing LedgerKeyHashBase64 field. "+
+			"JSON output includes ledger_key_hash_base_64=%q but Parquet conversion drops it entirely. "+
+			"The hex LedgerKeyHash=%q is preserved, but the base64 variant is lost.",
+			input.LedgerKeyHashBase64, input.LedgerKeyHash)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestContractCodeParquetDropsLedgerKeyHashBase64
+    data_integrity_poc_test.go:52: BUG CONFIRMED: ContractCodeOutputParquet is missing LedgerKeyHashBase64 field. JSON output includes ledger_key_hash_base_64="AAAABwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" but Parquet conversion drops it entirely. The hex LedgerKeyHash="dfed061dbe464e0ff320744fcd604ac08b39daa74fa24110936654cbcb915ccc" is preserved, but the base64 variant is lost.
+--- FAIL: TestContractCodeParquetDropsLedgerKeyHashBase64 (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.795s
+```
