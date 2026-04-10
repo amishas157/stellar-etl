@@ -83,3 +83,81 @@ The bug is confirmed and matches Investigation Pattern 6 (Error propagation). Sp
 - **Setup**: Create a mock `*os.File` that returns an error on `Write()`. Alternatively, use a real file on a full filesystem (e.g., write to `/dev/full` on Linux) or open a file read-only.
 - **Steps**: Call `ExportEntry(validStruct, brokenFile, nil)` where `brokenFile` is an `*os.File` whose Write method will fail.
 - **Assertion**: Assert that the returned `error` is non-nil when `outFile.Write()` fails. Currently it will be `nil`, demonstrating the bug. Also assert that the returned byte count is 0 (not the partial count from the failed write).
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: cmd/data_integrity_poc_test.go
+**Test Name**: "TestExportEntrySwallowsWriteErrors"
+**Test Language**: Go
+
+### Demonstration
+
+The test creates a file opened read-only (so all `Write` calls return "bad file descriptor" errors), then calls `ExportEntry` with a valid JSON-serializable struct. Despite both `outFile.Write(marshalled)` and `outFile.WriteString("\n")` failing with I/O errors, `ExportEntry` returns `nil` — proving that all 10+ export command callers will silently treat failed writes as successful row exports, potentially uploading truncated files to GCS.
+
+### Test Body
+
+```go
+package cmd
+
+import (
+	"os"
+	"testing"
+)
+
+// TestExportEntrySwallowsWriteErrors demonstrates that ExportEntry returns nil
+// when the underlying file write fails, silently dropping rows from the export.
+// A PASSING test means the bug IS present (error is swallowed).
+func TestExportEntrySwallowsWriteErrors(t *testing.T) {
+	// Create a temp file and open it read-only so Write() will fail.
+	tmpFile, err := os.CreateTemp(t.TempDir(), "poc-write-err-*.jsonl")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	closedFileName := tmpFile.Name()
+	tmpFile.Close()
+
+	readOnlyFile, err := os.Open(closedFileName)
+	if err != nil {
+		t.Fatalf("failed to open file read-only: %v", err)
+	}
+	defer readOnlyFile.Close()
+
+	// Verify the file truly rejects writes (precondition).
+	_, writeErr := readOnlyFile.Write([]byte("test"))
+	if writeErr == nil {
+		t.Fatal("precondition failed: expected read-only file to reject writes")
+	}
+	t.Logf("Precondition confirmed: file rejects writes with: %v", writeErr)
+
+	// A valid entry that will marshal to JSON without error.
+	entry := map[string]string{"key": "value"}
+
+	// Call ExportEntry with the read-only file — both Write calls will fail.
+	_, exportErr := ExportEntry(entry, readOnlyFile, nil)
+
+	// The bug: ExportEntry returns nil even though both writes failed.
+	if exportErr != nil {
+		t.Fatalf("bug appears fixed: ExportEntry returned error %v (expected nil due to swallowed error)", exportErr)
+	}
+	t.Log("BUG CONFIRMED: ExportEntry returned nil error despite file write failure — " +
+		"callers will silently treat this as a successful row export")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestExportEntrySwallowsWriteErrors
+    data_integrity_poc_test.go:31: Precondition confirmed: file rejects writes with: write /var/folders/wz/c3l_zq0s6qscqln_qh5s00240000gn/T/TestExportEntrySwallowsWriteErrors2591524950/001/poc-write-err-3216846166.jsonl: bad file descriptor
+time="2026-04-10T15:33:08.374-05:00" level=error msg="Error writing map[key:value] to file: write ...poc-write-err-3216846166.jsonl: bad file descriptor"
+time="2026-04-10T15:33:08.374-05:00" level=error msg="Error writing new line to file ...poc-write-err-3216846166.jsonl: bad file descriptor"
+    data_integrity_poc_test.go:43: BUG CONFIRMED: ExportEntry returned nil error despite file write failure — callers will silently treat this as a successful row export
+--- PASS: TestExportEntrySwallowsWriteErrors (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/cmd	2.031s
+```
