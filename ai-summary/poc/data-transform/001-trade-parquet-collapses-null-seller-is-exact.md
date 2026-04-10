@@ -78,3 +78,78 @@ Manage-offer trades (null) and strict-send path payments (false) become indistin
 - **Setup**: Use the existing `inputEnvelope` test helper with a ManageBuyOffer operation to produce a TradeOutput where `SellerIsExact` is `null.Bool{}`, and a PathPaymentStrictSend operation to produce a TradeOutput where `SellerIsExact` is `null.BoolFrom(false)`
 - **Steps**: Call `TransformTrade()` for both operation types, then call `.ToParquet()` on each result
 - **Assertion**: Assert that the JSON-layer outputs differ (`SellerIsExact.Valid` is false vs true), then assert that the Parquet outputs also differ — the test should fail, demonstrating the collapse: `parquetManageOffer.SellerIsExact == parquetStrictSend.SellerIsExact` both equal `false`
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestTradeParquetCollapsesNullSellerIsExact"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs two `TradeOutput` values: one with `SellerIsExact = null.Bool{}` (manage-offer, null/not-applicable) and one with `SellerIsExact = null.BoolFrom(false)` (strict-send, explicit false). It verifies the JSON-layer values are distinct (Valid=false vs Valid=true), then converts both to Parquet via `ToParquet()`. Both Parquet values collapse to `false`, proving that the tri-state nullable field loses information during Parquet serialization — manage-offer trades become indistinguishable from strict-send path payment trades.
+
+### Test Body
+
+```go
+func TestTradeParquetCollapsesNullSellerIsExact(t *testing.T) {
+	// 1. Construct a manage-offer trade output where SellerIsExact is null
+	//    (zero-value null.Bool{} — Valid=false, Bool=false)
+	manageOfferTrade := TradeOutput{
+		SellerIsExact: null.Bool{}, // null — concept does not apply
+	}
+
+	// 2. Construct a strict-send path payment trade output where SellerIsExact
+	//    is explicitly false (Valid=true, Bool=false)
+	strictSendTrade := TradeOutput{
+		SellerIsExact: null.BoolFrom(false), // explicit false — seller is not exact
+	}
+
+	// Verify precondition: the JSON-layer values are distinct
+	if manageOfferTrade.SellerIsExact.Valid == strictSendTrade.SellerIsExact.Valid {
+		t.Fatalf("precondition failed: JSON-layer SellerIsExact.Valid should differ; "+
+			"manage-offer Valid=%v, strict-send Valid=%v",
+			manageOfferTrade.SellerIsExact.Valid, strictSendTrade.SellerIsExact.Valid)
+	}
+	t.Logf("JSON layer: manage-offer SellerIsExact={Valid:%v, Bool:%v}, strict-send SellerIsExact={Valid:%v, Bool:%v}",
+		manageOfferTrade.SellerIsExact.Valid, manageOfferTrade.SellerIsExact.Bool,
+		strictSendTrade.SellerIsExact.Valid, strictSendTrade.SellerIsExact.Bool)
+
+	// 3. Convert both to Parquet
+	manageOfferParquet := manageOfferTrade.ToParquet().(TradeOutputParquet)
+	strictSendParquet := strictSendTrade.ToParquet().(TradeOutputParquet)
+
+	t.Logf("Parquet layer: manage-offer SellerIsExact=%v, strict-send SellerIsExact=%v",
+		manageOfferParquet.SellerIsExact, strictSendParquet.SellerIsExact)
+
+	// 4. BUG DEMONSTRATION: Both Parquet values are false, making them
+	//    indistinguishable. The null (not-applicable) value was collapsed
+	//    into the same value as explicit false.
+	if manageOfferParquet.SellerIsExact == strictSendParquet.SellerIsExact {
+		t.Errorf("BUG CONFIRMED: Parquet collapses null and explicit-false SellerIsExact into the same value.\n"+
+			"  manage-offer (should be null): Parquet SellerIsExact=%v\n"+
+			"  strict-send (explicit false):  Parquet SellerIsExact=%v\n"+
+			"  These two distinct JSON states are now indistinguishable in Parquet output.",
+			manageOfferParquet.SellerIsExact, strictSendParquet.SellerIsExact)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestTradeParquetCollapsesNullSellerIsExact
+    data_integrity_poc_test.go:234: JSON layer: manage-offer SellerIsExact={Valid:false, Bool:false}, strict-send SellerIsExact={Valid:true, Bool:false}
+    data_integrity_poc_test.go:242: Parquet layer: manage-offer SellerIsExact=false, strict-send SellerIsExact=false
+    data_integrity_poc_test.go:249: BUG CONFIRMED: Parquet collapses null and explicit-false SellerIsExact into the same value.
+          manage-offer (should be null): Parquet SellerIsExact=false
+          strict-send (explicit false):  Parquet SellerIsExact=false
+          These two distinct JSON states are now indistinguishable in Parquet output.
+--- FAIL: TestTradeParquetCollapsesNullSellerIsExact (0.00s)
+FAIL
+```
