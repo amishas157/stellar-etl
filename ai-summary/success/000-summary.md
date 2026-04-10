@@ -24,3 +24,4 @@
 - `data-transform/003-transaction-parquet-zeroes-absent-min-account-sequence.md` — High — transaction Parquet export encodes absent `min_account_sequence` as `0`, collapsing it with explicit `min_account_sequence=0`
 - `export-pipeline/010-trade-limit-counts-operations-before-trades.md` — High — `export_trades --limit` counts trade-capable operations before emitted trade rows and can return empty or truncated exports
 - `export-pipeline/011-text-hash-muxed-memos-forced-to-id-zero.md` — High — token transfer export rewrites text/hash `ToMuxedInfo` arms into fabricated muxed account ID `0`
+- `data-transform/004-trade-parquet-collapses-null-seller-is-exact.md` — High — trade Parquet export flattens nullable `seller_is_exact` to `false`, collapsing manage-offer and strict-send semantics
