@@ -4,3 +4,4 @@
 - `utilities/001-float64-stroop-collisions.md` — Critical — `ConvertStroopValueToReal` collapses distinct stroop amounts into the same exported float
 - `external-io/001-contract-event-parquet-operation-id-dropped.md` — High — contract event Parquet conversion zeroes populated `operation_id` values
 - `external-io/002-transactions-parquet-drops-tx-signers.md` — High — transaction Parquet export omits populated `tx_signers` from every row
+- `external-io/003-stale-parquet-upload-before-regeneration.md` — High — four export commands upload stale prior-run Parquet objects before regenerating current output
