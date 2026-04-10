@@ -70,3 +70,76 @@ OperationID:              ceo.OperationID.Int64,
 - **Setup**: Create a `ContractEventOutput` with `OperationID` set to a non-zero `null.IntFrom(someValue)`, e.g. `null.IntFrom(12345)`
 - **Steps**: Call `.ToParquet()` on the struct and cast the result to `ContractEventOutputParquet`
 - **Assertion**: Assert that the returned `ContractEventOutputParquet.OperationID` equals the input value (12345), not 0
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestContractEventToParquetDropsOperationID"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `ContractEventOutput` with `OperationID` set to a realistic TOID value (85899350017) via `null.IntFrom()`, then calls `ToParquet()` and checks the resulting Parquet struct. The Parquet `OperationID` field is `0` instead of the expected `85899350017`, confirming that the `ToParquet()` method silently drops the operation ID for every operation-scoped contract event exported to Parquet.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+	"time"
+
+	"github.com/guregu/null"
+)
+
+func TestContractEventToParquetDropsOperationID(t *testing.T) {
+	// 1. Construct a ContractEventOutput with a non-zero OperationID
+	inputOperationID := int64(85899350017) // realistic TOID value
+	ceo := ContractEventOutput{
+		TransactionHash:          "abc123",
+		TransactionID:            999,
+		Successful:               true,
+		LedgerSequence:           100,
+		ClosedAt:                 time.Now(),
+		InSuccessfulContractCall: true,
+		ContractId:               "CABCDEF",
+		Type:                     0,
+		TypeString:               "contract",
+		Topics:                   nil,
+		TopicsDecoded:            nil,
+		Data:                     nil,
+		DataDecoded:              nil,
+		ContractEventXDR:         "AAAA",
+		OperationID:              null.IntFrom(inputOperationID),
+	}
+
+	// 2. Run the production ToParquet() converter
+	parquetRaw := ceo.ToParquet()
+	parquet, ok := parquetRaw.(ContractEventOutputParquet)
+	if !ok {
+		t.Fatalf("ToParquet() returned unexpected type %T", parquetRaw)
+	}
+
+	// 3. Assert the Parquet OperationID matches the input
+	if parquet.OperationID != inputOperationID {
+		t.Errorf("OperationID corrupted in Parquet conversion: got %d, want %d",
+			parquet.OperationID, inputOperationID)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestContractEventToParquetDropsOperationID
+    data_integrity_poc_test.go:40: OperationID corrupted in Parquet conversion: got 0, want 85899350017
+--- FAIL: TestContractEventToParquetDropsOperationID (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.981s
+```
