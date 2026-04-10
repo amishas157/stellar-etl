@@ -69,3 +69,123 @@ Short, bounded exports may finish before hitting the descriptor limit, so the fa
 - **Setup**: Call `exportTransformedData()` in a loop simulating many batches, with a temporary output directory and dummy transform outputs for multiple resource types. Optionally lower the process FD limit with `syscall.Setrlimit(syscall.RLIMIT_NOFILE, ...)` to trigger the issue faster.
 - **Steps**: (1) Record the number of open FDs before the loop. (2) Call `exportTransformedData()` N times (e.g., 50 iterations × 10 resource types = 500 FDs). (3) Record the number of open FDs after the loop.
 - **Assertion**: The number of open FDs after the loop should be significantly higher than before (proportional to N × resource_count), demonstrating that descriptors are not being released. Alternatively, with a low FD limit, assert that `MustOutFile` eventually fatals.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: cmd/data_integrity_poc_test.go
+**Test Name**: "TestExportTransformedDataLeaksFileDescriptors"
+**Test Language**: Go
+
+### Demonstration
+
+The test calls `exportTransformedData()` 20 times with 5 resource types each (100 file opens total), with GC disabled to prevent finalizer-based cleanup. It measures the next available file descriptor number before and after the loop. The test confirmed 200 leaked FDs (2 per resource per iteration — one from `createOutputFile`'s unclosed `os.Create` and one from `os.OpenFile` in `MustOutFile`), proving that `exportTransformedData()` never closes its output files.
+
+### Test Body
+
+```go
+package cmd
+
+import (
+	"os"
+	"runtime"
+	"runtime/debug"
+	"testing"
+)
+
+// nextAvailableFD returns the lowest available file descriptor number.
+// This works because the OS always allocates the lowest available FD.
+// If FDs have been leaked (not closed), the next available FD will be higher.
+func nextAvailableFD(t *testing.T) int {
+	t.Helper()
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("could not open /dev/null: %v", err)
+	}
+	fd := int(f.Fd())
+	f.Close()
+	return fd
+}
+
+// TestExportTransformedDataLeaksFileDescriptors demonstrates that
+// exportTransformedData() never closes the JSON output files it opens,
+// causing file descriptor leaks proportional to (batches × resource_types).
+func TestExportTransformedDataLeaksFileDescriptors(t *testing.T) {
+	tmpDir := t.TempDir()
+	parquetDir := t.TempDir()
+
+	// Use 5 dummy resource types to simulate a realistic batch.
+	resourceTypes := []string{"accounts", "offers", "trustlines", "ttl", "contract_data"}
+
+	// Build a transformedOutput map with one trivial entry per resource.
+	// ExportEntry calls json.Marshal, so a simple map works fine.
+	makeOutput := func() map[string][]interface{} {
+		out := make(map[string][]interface{})
+		for _, r := range resourceTypes {
+			out[r] = []interface{}{
+				map[string]string{"id": "test", "type": r},
+			}
+		}
+		return out
+	}
+
+	// Run GC once to clean pre-existing garbage, then disable GC so
+	// finalizers cannot reclaim leaked *os.File objects during measurement.
+	runtime.GC()
+	oldGCPercent := debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(oldGCPercent)
+
+	fdBefore := nextAvailableFD(t)
+
+	const iterations = 20
+	for i := 0; i < iterations; i++ {
+		err := exportTransformedData(
+			uint32(i*100),       // start
+			uint32((i+1)*100-1), // end
+			tmpDir,
+			parquetDir,
+			makeOutput(),
+			"", "", "", // no cloud
+			nil,   // extra
+			false, // no parquet
+		)
+		if err != nil {
+			t.Fatalf("exportTransformedData failed on iteration %d: %v", i, err)
+		}
+	}
+
+	fdAfter := nextAvailableFD(t)
+	leaked := fdAfter - fdBefore
+
+	// We opened iterations × len(resourceTypes) = 20 × 5 = 100 files.
+	// If Close() were called, leaked should be ~0.
+	// We assert at least half leaked (allowing some slack).
+	expectedLeaked := iterations * len(resourceTypes) / 2
+
+	t.Logf("FD before: %d, FD after: %d, leaked: %d (expected at least %d)",
+		fdBefore, fdAfter, leaked, expectedLeaked)
+
+	if leaked < expectedLeaked {
+		t.Errorf("Expected at least %d leaked FDs, but only %d leaked. "+
+			"The bug may have been fixed, or GC finalizers ran.", expectedLeaked, leaked)
+	} else {
+		t.Logf("CONFIRMED: %d file descriptors leaked — exportTransformedData() "+
+			"does not close its JSON output files.", leaked)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestExportTransformedDataLeaksFileDescriptors
+    data_integrity_poc_test.go:79: FD before: 4, FD after: 204, leaked: 200 (expected at least 50)
+    data_integrity_poc_test.go:86: CONFIRMED: 200 file descriptors leaked — exportTransformedData() does not close its JSON output files.
+--- PASS: TestExportTransformedDataLeaksFileDescriptors (0.02s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/cmd	1.942s
+```
