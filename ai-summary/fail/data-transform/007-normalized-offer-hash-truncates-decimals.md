@@ -32,3 +32,31 @@ The test fixture in `offer_normalized_test.go:106-113` uses `BaseAmount: 262.845
 ## Anti-Evidence
 
 If normalized offers were intentionally grouped at 6-decimal precision, the truncation would be expected. But the struct stores full `BaseAmount` and `Price` alongside the hash, so the current behavior creates a mismatch where the row claims one precise state while its deduplication key only encodes a rounded approximation.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-10
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of ai-summary/success/data-integrity/001-dim-offer-id-collision.md.gh-published
+**Failed At**: reviewer
+
+### Trace Summary
+
+The hypothesis correctly identifies that `extractDimOffer()` in `offer_normalized.go:140` uses `fmt.Sprintf("%d/%f/%f", ...)` which truncates float64 values to 6 decimal places, losing stroop-level precision. The code path is real and the bug mechanism is valid. However, this exact finding has already been confirmed and published as a success under the `data-integrity` subsystem.
+
+### Code Paths Examined
+
+- `internal/transform/offer_normalized.go:139-147` — confirmed `%f` formatting truncates at 6 decimals
+- `internal/transform/offer.go:63-66,79-100` — confirmed Amount is float64 from `ConvertStroopValueToReal`
+- `internal/utils/main.go:84-88` — confirmed stroop conversion preserves 7-digit precision via `big.NewRat`
+
+### Why It Failed
+
+This is a duplicate of an already-confirmed and published finding: `ai-summary/success/data-integrity/001-dim-offer-id-collision.md.gh-published` ("DimOfferID rounds away one-stroop offer updates"). That investigation identifies the identical root cause (`%f` truncation in `extractDimOffer`), the identical affected code paths, and already includes a complete PoC test. The only difference is the subsystem label (`data-integrity` vs `data-transform`).
+
+### Lesson Learned
+
+The `%f` formatting truncation in `extractDimOffer` is a cross-subsystem concern — it was originally discovered under `data-integrity` rather than `data-transform`. Future hypothesis generators should check success records across all subsystems, not just the target subsystem, before proposing findings related to shared code paths like `offer_normalized.go`.
