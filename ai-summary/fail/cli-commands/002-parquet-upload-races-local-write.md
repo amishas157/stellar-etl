@@ -37,3 +37,32 @@ The unaffected sibling commands (`export_assets`, `export_effects`, `export_cont
 ## Anti-Evidence
 
 If the parquet path does not already exist, the command fails loudly because `UploadTo` cannot open the file. The silent-corruption path requires a rerun or reused workspace where an older parquet file already exists at the same path.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE — duplicate of success/cli-commands/001-parquet-upload-before-write-breaks-parquet-export.md.gh-published
+**Date**: 2026-04-10
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of success/cli-commands/001-parquet-upload-before-write-breaks-parquet-export.md.gh-published
+**Failed At**: reviewer
+
+### Trace Summary
+
+This hypothesis describes the exact same bug already confirmed and published in `ai-summary/success/cli-commands/001-parquet-upload-before-write-breaks-parquet-export.md.gh-published`. Both identify the same four affected commands (`export_ledgers`, `export_transactions`, `export_operations`, `export_trades`), the same root cause (`MaybeUpload` called before `WriteParquet`), and the same affected code locations.
+
+### Code Paths Examined
+
+- `cmd/export_ledgers.go:68-72` — same location cited in the existing success finding
+- `cmd/export_transactions.go:61-65` — same location cited in the existing success finding
+- `cmd/export_operations.go:61-65` — same location cited in the existing success finding
+- `cmd/export_trades.go:66-70` — same location cited in the existing success finding
+
+### Why It Failed
+
+This is a direct duplicate of an already-confirmed and published finding. The existing success entry covers the identical bug mechanism, affected commands, and code paths. The only difference is framing: the existing finding focuses on the first-run failure (file doesn't exist yet), while this hypothesis frames it as a stale-data-on-rerun scenario. Both are consequences of the same root cause.
+
+### Lesson Learned
+
+When a hypothesis describes the same ordering bug (upload-before-write) in the same four commands, it is the same finding regardless of whether the framing emphasizes first-run failure vs. stale-data-on-rerun. Check success files for substantially equivalent root causes, not just identical titles.

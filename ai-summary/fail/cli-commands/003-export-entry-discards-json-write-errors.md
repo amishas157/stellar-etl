@@ -33,3 +33,30 @@ The helper has signature `(int, error)` but returns `numBytes + newLineNumBytes,
 ## Anti-Evidence
 
 The normal ledger-content path is unlikely to trigger marshal failures because the exported structs are regular Go values. This hypothesis depends on real write-path I/O failures, not on malformed Stellar data itself.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-10
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of ai-summary/success/cli-commands/002-export-entry-swallows-write-errors.md.gh-published
+**Failed At**: reviewer
+
+### Trace Summary
+
+This hypothesis describes ExportEntry's error-swallowing behavior on lines 78-85 of cmd/command_utils.go, where Write and WriteString errors are logged but the function returns nil. This is the exact same finding already confirmed and published in the success directory.
+
+### Code Paths Examined
+
+- `cmd/command_utils.go:ExportEntry:55-86` — confirmed write errors logged but nil returned
+- `ai-summary/success/cli-commands/002-export-entry-swallows-write-errors.md.gh-published` — identical finding already confirmed, PoC'd, and published
+
+### Why It Failed
+
+This hypothesis is a duplicate of an already-confirmed and published finding (002-export-entry-swallows-write-errors). The mechanism, target code, severity, and impact are identical.
+
+### Lesson Learned
+
+Check the success directory for existing confirmed findings before generating new hypotheses about the same code path.

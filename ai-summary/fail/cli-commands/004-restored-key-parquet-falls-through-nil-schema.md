@@ -32,3 +32,30 @@ The repository defines `RestoredKeyOutput` and enables `--export-restored-keys`,
 ## Anti-Evidence
 
 If `--write-parquet` is omitted, restored-key JSON export is unaffected. This is specifically a parquet-mode gap rather than a problem with restored-key transformation itself.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE — duplicate of ai-summary/success/cli-commands/003-restored-key-parquet-path-missing.md.gh-published
+**Date**: 2026-04-10
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of ai-summary/success/cli-commands/003-restored-key-parquet-path-missing.md.gh-published
+**Failed At**: reviewer
+
+### Trace Summary
+
+The hypothesis describes the missing `transform.RestoredKeyOutput` case in the parquet type switch inside `exportTransformedData` (cmd/export_ledger_entry_changes.go:321-364). This is a real bug — the switch at lines 322-364 handles 10 types but omits `RestoredKeyOutput`, causing `skip` to remain false and `transformedResource`/`parquetSchema` to remain nil, so `WriteParquet` at line 371 is called with empty data. However, this exact finding has already been confirmed and published.
+
+### Code Paths Examined
+
+- `cmd/export_ledger_entry_changes.go:exportTransformedData:304-377` — confirmed the parquet type switch omits `transform.RestoredKeyOutput`
+- `cmd/export_ledger_entry_changes.go:111-126` — confirmed restored-key rows are collected into `transformedOutputs["restored_key"]`
+
+### Why It Failed
+
+This is a duplicate of the already-confirmed success entry `ai-summary/success/cli-commands/003-restored-key-parquet-path-missing.md.gh-published`, which describes the identical root cause (missing `RestoredKeyOutput` case in parquet type switch), identical mechanism (nil schema passed to `WriteParquet`), and identical affected code paths.
+
+### Lesson Learned
+
+Before generating new hypotheses, check the success directory for existing confirmed findings on the same code path to avoid re-investigation of already-published bugs.
