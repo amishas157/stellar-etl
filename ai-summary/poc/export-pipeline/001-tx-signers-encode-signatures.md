@@ -74,3 +74,101 @@ The correct behavior from `DecoratedSignature` is limited — you cannot recover
 - **Setup**: Use the existing test transaction fixtures that contain `DecoratedSignature` entries (lines 285-290). The test data already has a 64-byte `Signature` field.
 - **Steps**: Call `getTxSigners()` with the test `DecoratedSignature` slice. Measure the length of the returned strings.
 - **Assertion**: Assert that each returned string is 108 characters (proving it encodes 64 bytes, not 32). Assert that the returned string does NOT match any known signer public key from the test transaction's source account. This demonstrates the field contains signature material, not signer identities. Compare against the correct 56-character account ID that `formatSigners()` would produce for the same transaction's actual signers.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestTxSignersEncodeSignaturesNotPublicKeys"
+**Test Language**: Go
+
+### Demonstration
+
+The test calls `getTxSigners()` with a `DecoratedSignature` containing a 64-byte Ed25519 signature and verifies the returned string is 108 characters long (not the standard 56-character account ID length). It also confirms the returned value does not match the transaction's actual source account address. This proves `tx_signers` contains encoded signature material rather than signer identities, producing fake `G...` addresses that look valid but correspond to no real Stellar account.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestTxSignersEncodeSignaturesNotPublicKeys demonstrates that getTxSigners()
+// encodes the raw 64-byte Ed25519 signature as a G... account ID instead of
+// encoding the 32-byte signer public key. This produces a 108-character string
+// (64 bytes encoded) rather than the standard 56-character account ID (32 bytes).
+func TestTxSignersEncodeSignaturesNotPublicKeys(t *testing.T) {
+	// Use the same signature bytes from the existing test fixtures
+	sig := xdr.DecoratedSignature{
+		Hint: xdr.SignatureHint{99, 66, 175, 143},
+		Signature: xdr.Signature{
+			244, 107, 139, 92, 189, 156, 207, 79, 84, 56, 2, 70, 75, 22, 237,
+			50, 100, 242, 159, 177, 27, 240, 66, 122, 182, 45, 189, 78, 5, 127,
+			26, 61, 179, 238, 229, 76, 32, 206, 122, 13, 154, 133, 148, 149, 29,
+			250, 48, 132, 44, 86, 163, 56, 32, 44, 75, 87, 226, 251, 76, 4, 59,
+			182, 132, 8,
+		},
+	}
+
+	signers, err := getTxSigners([]xdr.DecoratedSignature{sig})
+	if err != nil {
+		t.Fatalf("getTxSigners returned unexpected error: %v", err)
+	}
+
+	if len(signers) != 1 {
+		t.Fatalf("expected 1 signer, got %d", len(signers))
+	}
+
+	signer := signers[0]
+
+	// A valid Stellar account ID (G...) is always 56 characters because it
+	// encodes exactly 32 bytes (Ed25519 public key). The signature is 64 bytes,
+	// so encoding it as an account ID produces a 108-character string.
+	const validAccountIDLen = 56
+
+	if len(signer) == validAccountIDLen {
+		t.Fatalf("signer string is 56 chars — expected longer (108) because "+
+			"getTxSigners encodes the 64-byte signature, not a 32-byte public key. Got: %s", signer)
+	}
+
+	// The returned string is 108 characters — proof it encodes 64 bytes of
+	// signature material, not the 32-byte signer public key.
+	const expectedBuggyLen = 108
+	if len(signer) != expectedBuggyLen {
+		t.Errorf("expected signer string length %d (64-byte signature encoded as account ID), got %d: %s",
+			expectedBuggyLen, len(signer), signer)
+	}
+
+	// Additionally verify the source account's real address is NOT in the output.
+	// The transaction's source account (testAccount1) has a known 56-char address.
+	if signer == testAccount1Address {
+		t.Errorf("signer unexpectedly matches the source account address %s — "+
+			"expected encoded signature material instead", testAccount1Address)
+	}
+
+	t.Logf("BUG CONFIRMED: getTxSigners() returns %d-char string (encoded 64-byte signature) "+
+		"instead of %d-char account ID (32-byte public key)", len(signer), validAccountIDLen)
+	t.Logf("Returned signer: %s", signer)
+	t.Logf("Source account:  %s", testAccount1Address)
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestTxSignersEncodeSignaturesNotPublicKeys
+    data_integrity_poc_test.go:62: BUG CONFIRMED: getTxSigners() returns 108-char string (encoded 64-byte signature) instead of 56-char account ID (32-byte public key)
+    data_integrity_poc_test.go:64: Returned signer: GD2GXC24XWOM6T2UHABEMSYW5UZGJ4U7WEN7AQT2WYW32TQFP4ND3M7O4VGCBTT2BWNILFEVDX5DBBBMK2RTQIBMJNL6F62MAQ53NBAIXUDA
+    data_integrity_poc_test.go:65: Source account:  GCEODJVUUVYVFD5KT4TOEDTMXQ76OPFOQC2EMYYMLPXQCUVPOB6XRWPQ
+--- PASS: TestTxSignersEncodeSignaturesNotPublicKeys (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.906s
+```
