@@ -25,3 +25,4 @@
 - `export-pipeline/010-trade-limit-counts-operations-before-trades.md` — High — `export_trades --limit` counts trade-capable operations before emitted trade rows and can return empty or truncated exports
 - `export-pipeline/011-text-hash-muxed-memos-forced-to-id-zero.md` — High — token transfer export rewrites text/hash `ToMuxedInfo` arms into fabricated muxed account ID `0`
 - `data-transform/004-trade-parquet-collapses-null-seller-is-exact.md` — High — trade Parquet export flattens nullable `seller_is_exact` to `false`, collapsing manage-offer and strict-send semantics
+- `data-transform/005-trade-parquet-drops-liquidity-pool-strkey.md` — High — trade Parquet export drops populated `selling_liquidity_pool_id_strkey` for liquidity-pool trades
