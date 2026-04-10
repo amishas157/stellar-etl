@@ -32,3 +32,4 @@
 - `cli-commands/005-trade-parquet-omits-liquidity-pool-strkey.md` — High — `export_trades --write-parquet` drops populated `selling_liquidity_pool_id_strkey` for liquidity-pool trades
 - `data-input/001-export-ledgers-captive-core-drops-soroban-lcm-fields.md` — High — `export_ledgers --captive-core` routes through a history-archive reader that omits `LedgerCloseMeta`, silently zeroing Soroban ledger fields
 - `data-input/002-asset-readers-overshoot-limit-within-ledger.md` — Medium — `export_assets --limit` scans through the rest of the current ledger and can emit extra asset rows
+- `data-transform/009-trustline-parquet-drops-liquidity-pool-id-strkey.md` — High — trustline Parquet export drops populated `liquidity_pool_id_strkey` for pool-share trustlines
