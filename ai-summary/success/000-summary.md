@@ -1,1 +1,2 @@
 - `data-integrity/001-dim-offer-id-collision.md` — High — `DimOfferID` rounds away one-stroop offer updates and collapses normalized offer states
+- `data-integrity/002-token-transfer-float64-rounding.md` — Critical — token transfer `amount` double-rounds large raw values and exports the wrong JSON number
