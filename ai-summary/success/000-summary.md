@@ -1,2 +1,3 @@
 - `data-integrity/001-dim-offer-id-collision.md` — High — `DimOfferID` rounds away one-stroop offer updates and collapses normalized offer states
 - `data-integrity/002-token-transfer-float64-rounding.md` — Critical — token transfer `amount` double-rounds large raw values and exports the wrong JSON number
+- `data-integrity/003-contract-event-parquet-operation-id-dropped.md` — High — contract event Parquet conversion zeroes populated `operation_id` values
