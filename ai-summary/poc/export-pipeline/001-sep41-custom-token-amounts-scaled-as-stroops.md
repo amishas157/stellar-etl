@@ -68,3 +68,155 @@ The ETL already has the information needed to distinguish SAC from custom tokens
 - **Setup**: Add a new test event with `Asset: nil` (no `Asset_IssuedAsset` or `Asset_Native` set) to simulate a custom SEP-41 token transfer. Set `Amount: "1000"` in the Transfer struct.
 - **Steps**: Call `transformEvents` with the custom-token event and a valid `LedgerCloseMeta`.
 - **Assertion**: Assert that the output `Amount` field equals `0.0001` (demonstrating the incorrect stroop scaling). The correct behavior would be to NOT scale the amount when the asset is nil (custom token), yielding `Amount=1000.0`. Additionally, verify that `AmountRaw` correctly equals `"1000"` and `AssetType` is empty string.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestCustomSEP41TokenAmountScaledAsStroops"
+**Test Language**: Go
+
+### Demonstration
+
+The test creates a custom SEP-41 token Transfer event with `Asset: nil` and `Amount: "1000"`, then calls `transformEvents`. The output `Amount` field is `9.999999999999999e-05` (≈0.0001) instead of the correct `1000.0`, confirming that the stroop scaling factor of `0.0000001` is unconditionally applied to all token events regardless of whether they represent SAC tokens (which use stroops) or custom SEP-41 tokens (which use raw contract units). The `AmountRaw` string field correctly preserves `"1000"`, and `AssetType` is empty, proving the event is recognized as a custom token but the amount scaling path ignores this distinction.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/guregu/null"
+	"github.com/stellar/go-stellar-sdk/processors/token_transfer"
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestCustomSEP41TokenAmountScaledAsStroops demonstrates that transformEvents
+// unconditionally multiplies all token amounts by 1e-7 (stroop scaling), even
+// for custom SEP-41 tokens whose AmountRaw is already in raw token units.
+// A custom token transfer with Amount="1000" should yield Amount=1000.0, but
+// the code produces Amount=0.0001.
+func TestCustomSEP41TokenAmountScaledAsStroops(t *testing.T) {
+	operationIndex := uint32(1)
+
+	// Custom SEP-41 token event: Asset is nil (no SAC asset)
+	customTokenEvents := []*token_transfer.TokenTransferEvent{
+		{
+			Meta: &token_transfer.EventMeta{
+				LedgerSequence:   10,
+				TxHash:           "txhash",
+				TransactionIndex: 1,
+				OperationIndex:   &operationIndex,
+				ContractAddress:  "customcontract",
+			},
+			Event: &token_transfer.TokenTransferEvent_Transfer{
+				Transfer: &token_transfer.Transfer{
+					From:   "from",
+					To:     "to",
+					Asset:  nil, // custom SEP-41: no SAC asset
+					Amount: "1000",
+				},
+			},
+		},
+	}
+
+	lcm := xdr.LedgerCloseMeta{
+		V: 1,
+		V1: &xdr.LedgerCloseMetaV1{
+			LedgerHeader: xdr.LedgerHeaderHistoryEntry{
+				Header: xdr.LedgerHeader{
+					ScpValue: xdr.StellarValue{
+						CloseTime: 1000,
+					},
+					LedgerSeq: 10,
+				},
+			},
+		},
+	}
+
+	outputs, err := transformEvents(customTokenEvents, lcm)
+	if err != nil {
+		t.Fatalf("transformEvents returned error: %v", err)
+	}
+
+	if len(outputs) != 1 {
+		t.Fatalf("expected 1 output, got %d", len(outputs))
+	}
+
+	output := outputs[0]
+
+	// Verify AmountRaw is preserved correctly
+	if output.AmountRaw != "1000" {
+		t.Errorf("AmountRaw corrupted: got %q, want %q", output.AmountRaw, "1000")
+	}
+
+	// Verify that AssetType is empty (custom token, not SAC)
+	if output.AssetType != "" {
+		t.Errorf("AssetType should be empty for custom SEP-41 token, got %q", output.AssetType)
+	}
+
+	// BUG DEMONSTRATION: Amount is incorrectly scaled by 1e-7.
+	// For a custom SEP-41 token, Amount should be 1000.0 (raw token units),
+	// but transformEvents unconditionally applies stroop scaling.
+	// Reproduce the exact runtime float64: ParseFloat then multiply
+	expectedBuggyFloat, _ := strconv.ParseFloat("1000", 64)
+	expectedBuggyFloat = expectedBuggyFloat * 0.0000001
+	correctAmount := 1000.0 // What it SHOULD be
+
+	if output.Amount != expectedBuggyFloat {
+		t.Errorf("Expected buggy Amount=%v (stroop-scaled), got %v", expectedBuggyFloat, output.Amount)
+	}
+
+	if output.Amount == correctAmount {
+		t.Error("Amount equals correct value 1000.0 — bug may have been fixed")
+	}
+
+	// Also verify the expected output structure for completeness
+	expectedOutput := TokenTransferOutput{
+		TransactionHash: "txhash",
+		TransactionID:   42949677056,
+		OperationID:     null.IntFrom(42949677057),
+		EventTopic:      "transfer",
+		From:            null.StringFrom("from"),
+		To:              null.StringFrom("to"),
+		Asset:           "",
+		AssetType:       "",
+		AssetCode:       null.NewString("", false),
+		AssetIssuer:     null.NewString("", false),
+		Amount:          expectedBuggyFloat,
+		AmountRaw:       "1000",
+		ContractID:      "customcontract",
+		LedgerSequence:  uint32(10),
+		ClosedAt:        time.Unix(1000, 0).UTC(),
+		ToMuxed:         null.NewString("", false),
+		ToMuxedID:       null.NewString("", false),
+	}
+
+	if output != expectedOutput {
+		t.Errorf("Output mismatch.\nGot:  %+v\nWant: %+v", output, expectedOutput)
+	}
+
+	t.Logf("BUG CONFIRMED: Custom SEP-41 token with AmountRaw=%q produces Amount=%v (should be %v)",
+		output.AmountRaw, output.Amount, correctAmount)
+	t.Logf("The amount is incorrectly divided by 10^7 because transformEvents applies stroop scaling unconditionally")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestCustomSEP41TokenAmountScaledAsStroops
+    data_integrity_poc_test.go:118: BUG CONFIRMED: Custom SEP-41 token with AmountRaw="1000" produces Amount=9.999999999999999e-05 (should be 1000)
+    data_integrity_poc_test.go:120: The amount is incorrectly divided by 10^7 because transformEvents applies stroop scaling unconditionally
+--- PASS: TestCustomSEP41TokenAmountScaledAsStroops (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.645s
+```
