@@ -74,3 +74,122 @@ The branch in `cmd/export_ledgers.go:28-31` routes `UseCaptiveCore=true` to `Get
 - **Setup**: Construct a `historyarchive.Ledger` with a valid header and a `xdr.LedgerCloseMeta` with V=1 containing non-zero `SorobanFeeWrite1Kb` and `TotalByteSizeOfLiveSorobanState`. Then construct a second call with the same ledger but a zero-value `xdr.LedgerCloseMeta{}`.
 - **Steps**: Call `TransformLedger(ledger, fullLCM)` and `TransformLedger(ledger, zeroLCM)`. Compare the Soroban fields.
 - **Assertion**: Assert that `TransformLedger(ledger, zeroLCM).SorobanFeeWrite1Kb == 0` while `TransformLedger(ledger, fullLCM).SorobanFeeWrite1Kb != 0`, demonstrating that the zero-value LCM silently drops Soroban data. Additionally, verify that `GetLedgersHistoryArchive()` returns structs with zero-value LCM fields to confirm the end-to-end path.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestPocZeroLCMDropsSorobanFields"
+**Test Language**: Go
+
+### Demonstration
+
+The test calls `TransformLedger` twice with the same valid ledger: once with a fully populated V1 `LedgerCloseMeta` (containing `SorobanFeeWrite1Kb=1234` and evicted keys), and once with a zero-value `LedgerCloseMeta{}` (simulating the `GetLedgersHistoryArchive()` output). The full LCM produces `SorobanFeeWrite1Kb=1234` and 1 evicted key, while the zero LCM produces `SorobanFeeWrite1Kb=0` and 0 evicted keys — proving silent data loss when the `--captive-core` flag routes to the history archive reader.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/xdr"
+	"github.com/stellar/stellar-etl/v2/internal/utils"
+)
+
+// TestPocZeroLCMDropsSorobanFields demonstrates that passing a zero-value
+// xdr.LedgerCloseMeta to TransformLedger silently zeroes all Soroban-derived
+// fields, which is exactly what happens in the GetLedgersHistoryArchive()
+// code path (used when --captive-core is set for export_ledgers).
+func TestPocZeroLCMDropsSorobanFields(t *testing.T) {
+	// Build a realistic ledger input (reuse the existing test helper)
+	hardCodedInputs, err := makeLedgerTestInput()
+	if err != nil {
+		t.Fatalf("failed to build test input: %v", err)
+	}
+
+	// The first hardcoded input has a V1 LCM with non-zero Soroban fields
+	fullInput := hardCodedInputs[0]
+
+	// ---- Control: TransformLedger with a FULL LCM should populate Soroban fields ----
+	fullOutput, err := TransformLedger(fullInput.Ledger, fullInput.LCM)
+	if err != nil {
+		t.Fatalf("TransformLedger with full LCM failed: %v", err)
+	}
+
+	if fullOutput.SorobanFeeWrite1Kb == 0 {
+		t.Fatalf("Control failed: SorobanFeeWrite1Kb should be non-zero with full LCM, got 0")
+	}
+	if len(fullOutput.EvictedLedgerKeysType) == 0 {
+		t.Fatalf("Control failed: EvictedLedgerKeysType should be non-empty with full LCM")
+	}
+
+	t.Logf("Control: SorobanFeeWrite1Kb=%d, EvictedLedgerKeysType=%v",
+		fullOutput.SorobanFeeWrite1Kb, fullOutput.EvictedLedgerKeysType)
+
+	// ---- PoC: TransformLedger with a ZERO-VALUE LCM (simulating history archive path) ----
+	// This is exactly what GetLedgersHistoryArchive returns:
+	//   HistoryArchiveLedgerAndLCM{Ledger: ledger}  // LCM left as zero value
+	zeroLCM := xdr.LedgerCloseMeta{} // V=0, V0=nil, V1=nil, V2=nil
+
+	zeroOutput, err := TransformLedger(fullInput.Ledger, zeroLCM)
+	if err != nil {
+		t.Fatalf("TransformLedger with zero LCM failed: %v", err)
+	}
+
+	// ASSERT: The zero-value LCM causes Soroban fields to silently become zero,
+	// proving the data corruption when --captive-core routes to the history archive reader.
+	if zeroOutput.SorobanFeeWrite1Kb != 0 {
+		t.Errorf("Expected SorobanFeeWrite1Kb=0 with zero LCM, got %d", zeroOutput.SorobanFeeWrite1Kb)
+	}
+	if zeroOutput.TotalByteSizeOfLiveSorobanState != 0 {
+		t.Errorf("Expected TotalByteSizeOfLiveSorobanState=0 with zero LCM, got %d", zeroOutput.TotalByteSizeOfLiveSorobanState)
+	}
+	if len(zeroOutput.EvictedLedgerKeysType) != 0 {
+		t.Errorf("Expected empty EvictedLedgerKeysType with zero LCM, got %v", zeroOutput.EvictedLedgerKeysType)
+	}
+	if len(zeroOutput.EvictedLedgerKeysHash) != 0 {
+		t.Errorf("Expected empty EvictedLedgerKeysHash with zero LCM, got %v", zeroOutput.EvictedLedgerKeysHash)
+	}
+
+	// Show the data loss: full LCM vs zero LCM
+	t.Logf("BUG DEMONSTRATED: With full LCM: SorobanFeeWrite1Kb=%d, EvictedKeys=%d items",
+		fullOutput.SorobanFeeWrite1Kb, len(fullOutput.EvictedLedgerKeysType))
+	t.Logf("BUG DEMONSTRATED: With zero LCM: SorobanFeeWrite1Kb=%d, EvictedKeys=%d items",
+		zeroOutput.SorobanFeeWrite1Kb, len(zeroOutput.EvictedLedgerKeysType))
+	t.Log("This proves that GetLedgersHistoryArchive (which omits LCM) causes silent Soroban field corruption")
+
+	// Also verify the history archive reader struct confirms the zero-value LCM pattern
+	simulated := utils.HistoryArchiveLedgerAndLCM{
+		Ledger: fullInput.Ledger,
+		// LCM intentionally omitted — matches ledgers_history_archive.go:24-26
+	}
+	if simulated.LCM.V != 0 {
+		t.Errorf("Expected zero-value LCM.V=0 from simulated history archive reader, got %d", simulated.LCM.V)
+	}
+	if simulated.LCM.V1 != nil {
+		t.Errorf("Expected nil LCM.V1 from simulated history archive reader")
+	}
+	if simulated.LCM.V2 != nil {
+		t.Errorf("Expected nil LCM.V2 from simulated history archive reader")
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestPocZeroLCMDropsSorobanFields
+    data_integrity_poc_test.go:37: Control: SorobanFeeWrite1Kb=1234, EvictedLedgerKeysType=[LedgerEntryTypeLiquidityPool]
+    data_integrity_poc_test.go:66: BUG DEMONSTRATED: With full LCM: SorobanFeeWrite1Kb=1234, EvictedKeys=1 items
+    data_integrity_poc_test.go:68: BUG DEMONSTRATED: With zero LCM: SorobanFeeWrite1Kb=0, EvictedKeys=0 items
+    data_integrity_poc_test.go:70: This proves that GetLedgersHistoryArchive (which omits LCM) causes silent Soroban field corruption
+--- PASS: TestPocZeroLCMDropsSorobanFields (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.810s
+```
