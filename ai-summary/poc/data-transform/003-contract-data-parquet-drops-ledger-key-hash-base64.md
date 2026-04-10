@@ -68,3 +68,96 @@ The bug is a straightforward omission: when `LedgerKeyHashBase64` was added to t
 - **Setup**: Use existing test fixtures to create a `ContractDataOutput` with a populated `LedgerKeyHashBase64` field; alternatively, construct a minimal `ContractDataOutput` struct literal with `LedgerKeyHashBase64` set to a non-empty string
 - **Steps**: Call `ToParquet()` on the `ContractDataOutput` and cast the result to `ContractDataOutputParquet`
 - **Assertion**: Verify that `ContractDataOutputParquet` has a `LedgerKeyHashBase64` field and that it equals the source value. Under the current code, the Parquet struct lacks the field entirely, so this test will fail to compile — demonstrating that the field is structurally absent from the Parquet schema
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-10
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestContractDataParquetDropsLedgerKeyHashBase64"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `ContractDataOutput` with `LedgerKeyHashBase64` set to a non-empty base64 string, then calls `ToParquet()` and uses reflection to check whether the returned `ContractDataOutputParquet` struct contains a `LedgerKeyHashBase64` field. The field is structurally absent from the Parquet schema, confirming that every Parquet export silently drops the base64 ledger key encoding that the JSON path preserves.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"reflect"
+	"testing"
+	"time"
+)
+
+// TestContractDataParquetDropsLedgerKeyHashBase64 demonstrates that
+// ContractDataOutputParquet omits the LedgerKeyHashBase64 field that
+// ContractDataOutput populates, silently dropping data on Parquet export.
+func TestContractDataParquetDropsLedgerKeyHashBase64(t *testing.T) {
+	// 1. Construct a ContractDataOutput with LedgerKeyHashBase64 populated
+	src := ContractDataOutput{
+		ContractId:          "CABCDEFG",
+		ContractKeyType:     "ScValTypeScvLedgerKeyContractInstance",
+		ContractDurability:  "persistent",
+		LedgerKeyHash:       "abcdef1234567890",
+		LedgerKeyHashBase64: "AAAAIQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+		LastModifiedLedger:  100,
+		LedgerEntryChange:   1,
+		LedgerSequence:      200,
+		ClosedAt:            time.Now(),
+		ContractDataXDR:     "deadbeef",
+	}
+
+	// Verify the source value is populated
+	if src.LedgerKeyHashBase64 == "" {
+		t.Fatal("test setup: LedgerKeyHashBase64 should be non-empty")
+	}
+
+	// 2. Convert to Parquet via production code path
+	parquetRaw := src.ToParquet()
+
+	// 3. Use reflection to check if LedgerKeyHashBase64 survived the conversion
+	parquetVal := reflect.ValueOf(parquetRaw)
+	parquetType := parquetVal.Type()
+
+	field := findField(parquetType, "LedgerKeyHashBase64")
+	if field == nil {
+		t.Errorf("ContractDataOutputParquet struct is missing LedgerKeyHashBase64 field entirely — "+
+			"the JSON schema has it (ContractDataOutput.LedgerKeyHashBase64 = %q) but the Parquet "+
+			"schema drops it, causing silent data loss on every Parquet export",
+			src.LedgerKeyHashBase64)
+		return
+	}
+
+	// If the field exists, verify the value was copied
+	got := parquetVal.FieldByName("LedgerKeyHashBase64").String()
+	if got != src.LedgerKeyHashBase64 {
+		t.Errorf("LedgerKeyHashBase64 not preserved: got %q, want %q", got, src.LedgerKeyHashBase64)
+	}
+}
+
+func findField(t reflect.Type, name string) *reflect.StructField {
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if f.Name == name {
+			return &f
+		}
+	}
+	return nil
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestContractDataParquetDropsLedgerKeyHashBase64
+    data_integrity_poc_test.go:41: ContractDataOutputParquet struct is missing LedgerKeyHashBase64 field entirely — the JSON schema has it (ContractDataOutput.LedgerKeyHashBase64 = "AAAAIQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=") but the Parquet schema drops it, causing silent data loss on every Parquet export
+--- FAIL: TestContractDataParquetDropsLedgerKeyHashBase64 (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.813s
+```
