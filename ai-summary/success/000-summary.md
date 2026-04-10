@@ -15,3 +15,4 @@
 - `export-pipeline/002-parquet-upload-before-write.md` — High — four export commands upload stale prior-run parquet objects before regenerating current output
 - `export-pipeline/003-export-entry-swallows-write-errors.md` — Medium — `ExportEntry` logs failed JSON writes but returns `nil`, so exporters treat dropped rows as successful
 - `data-transform/002-contract-event-parquet-operation-id-dropped.md` — High — contract event Parquet conversion zeroes populated `operation_id` values
+- `data-transform/003-transaction-parquet-zeroes-absent-min-account-sequence.md` — High — transaction Parquet export encodes absent `min_account_sequence` as `0`, collapsing it with explicit `min_account_sequence=0`
