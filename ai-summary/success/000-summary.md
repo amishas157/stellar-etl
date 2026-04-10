@@ -7,3 +7,4 @@
 - `external-io/003-stale-parquet-upload-before-regeneration.md` — High — four export commands upload stale prior-run Parquet objects before regenerating current output
 - `external-io/004-ledger-entry-changes-leaks-json-file-descriptors.md` — Medium — `export_ledger_entry_changes` leaves JSON output files open until GC and can stop later batches at the OS FD limit
 - `data-transform/001-tx-signers-encode-signature-bytes.md` — High — transaction `tx_signers` encodes signature bytes as fake account IDs
+- `cli-commands/001-parquet-upload-before-write-breaks-parquet-export.md` — Medium — four export commands try to upload the parquet artifact before generating it, causing partial exports when cloud upload is enabled
