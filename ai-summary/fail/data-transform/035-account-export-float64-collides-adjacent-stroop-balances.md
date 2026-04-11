@@ -31,3 +31,29 @@ The account transform emits three monetary fields (`balance`, `buying_liabilitie
 ## Anti-Evidence
 
 This only manifests for sufficiently large balances and liabilities; smaller account values remain distinguishable. The JSON schema is already defined as `float64`, so reviewers may decide this is an inherited schema constraint rather than a bug unless exact-stroop fidelity is required for the table.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-11
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of 034-account-export-float64-collides-adjacent-stroop-balances.md
+**Failed At**: reviewer
+
+### Trace Summary
+
+This hypothesis is an exact duplicate of the previously reviewed and rejected hypothesis at `ai-summary/fail/data-transform/034-account-export-float64-collides-adjacent-stroop-balances.md`. That prior review already traced the full code path and concluded the finding is NOT_VIABLE.
+
+### Code Paths Examined
+
+- `ai-summary/fail/data-transform/034-account-export-float64-collides-adjacent-stroop-balances.md` — identical hypothesis with complete NOT_VIABLE review already on file
+
+### Why It Failed
+
+Duplicate of 034. The prior review established that the account transform correctly uses `ConvertStroopValueToReal()` with `big.NewRat().Float64()`, which is the best possible float64 conversion. Unlike confirmed findings 016 (claimable balance) and 017 (LP deposit) where a worse conversion path existed, the account transform already uses the project's established correct conversion helper. The precision loss is an inherent property of the float64 schema type, not a coding bug.
+
+### Lesson Learned
+
+Check existing fail entries for the same subsystem before re-submitting; this exact hypothesis was already fully reviewed at 034.
