@@ -1,105 +1,53 @@
-# H001: Muxed fee accounts break Soroban fee reconciliation
+# 014: Muxed Soroban fee balance mismatch
 
 **Date**: 2026-04-11
-**Subsystem**: data-transform
 **Severity**: Critical
 **Impact**: Financial field produces wrong numeric value
-**Hypothesis by**: gpt-5.4, high
+**Subsystem**: data-transform
+**Final review by**: gpt-5.4, high
 
-## Expected Behavior
+## Summary
 
-For Soroban transactions, `inclusion_fee_charged` and `resource_fee_refund` should be computed from the actual fee-paying account's balance changes even when the source account or fee-bump fee source is a muxed `M...` address. The transform should normalize muxed accounts to their underlying `G...` account before matching ledger-entry balance changes, so a valid muxed Soroban fee payer produces the same fee breakdown as the equivalent unmuxed account.
+`TransformTransaction()` computes Soroban fee breakdowns by looking up fee-payer balance changes in `FeeChanges` and transaction meta. For muxed fee payers, it stores the fee account as an `M...` address but compares that string against ledger-entry `AccountId.Address()` values, which are always unmuxed `G...` addresses, so the lookup silently misses and exports wrong fee numbers.
 
-## Mechanism
+This reproduces for both classic Soroban transactions with a muxed source account and fee-bump Soroban transactions with a muxed fee source. In both cases the current code exports `inclusion_fee_charged = -38233` and `resource_fee_refund = 0` for a transaction whose correct values are `300` and `10705`.
 
-`TransformTransaction()` stores `feeAccountAddress` using `MuxedAccount.Address()`, which returns an `M...` strkey for muxed accounts, but `getAccountBalanceFromLedgerEntryChanges()` compares that string against `AccountId.Address()` values from ledger entries, which are always unmuxed `G...` account IDs. When the fee payer is muxed, both balance lookups miss, so the function computes `initialFeeCharged = 0`, producing corrupt fee-breakdown fields such as negative `inclusion_fee_charged` and zero `resource_fee_refund`.
+## Root Cause
 
-## Trigger
+In the Soroban branch, `TransformTransaction()` records the fee payer with `sourceAccount.Address()` or `feeBumpAccount.Address()`. For fully muxed accounts the SDK returns an `M...` strkey, but `getAccountBalanceFromLedgerEntryChanges()` matches against `accountEntry.AccountId.Address()`, which is derived from `AccountId` and therefore always yields the underlying `G...` account. Because the strings can never match for muxed fee payers, both the initial fee debit and the later refund lookup fall back to zero balances.
 
-Process any protocol-20+ Soroban transaction whose fee-paying account is muxed:
+## Reproduction
 
-1. A classic Soroban transaction with a muxed source account, or
-2. A Soroban fee-bump transaction whose `FeeSource` is muxed.
+During normal operation, this occurs whenever a Soroban transaction uses a muxed source account or a fee-bump transaction uses a muxed fee source. The rest of the transaction can be completely valid: the bug is triggered only by the address encoding mismatch between the envelope fee payer (`MuxedAccount`) and the ledger balance changes (`AccountId`).
 
-If the transaction charges a resource fee or later refunds part of it, the exported row will reconcile those amounts against a missing balance delta. For example, a transaction with `resource_fee = 38233` and no matched fee-account balance change will export `inclusion_fee_charged = -38233`.
+The existing unmuxed Soroban fee-bump fixture in `transaction_test.go` already shows the correct baseline for the same fee values (`inclusion_fee_charged = 300`, `resource_fee_refund = 10705`). Changing only the fee payer to a muxed form flips those exported fields to `-38233` and `0`.
 
-## Target Code
+## Affected Code
 
-- `internal/transform/transaction.go:TransformTransaction:148-159` — stores the Soroban fee payer as `sourceAccount.Address()` / `feeBumpAccount.Address()`
-- `internal/transform/transaction.go:TransformTransaction:177-202` — computes `inclusion_fee_charged` and `resource_fee_refund` from matched balance changes
-- `internal/transform/transaction.go:getAccountBalanceFromLedgerEntryChanges:306-333` — matches balance changes against unmuxed `AccountId.Address()` strings
-- `internal/utils/main.go:GetAccountAddressFromMuxedAccount:49-54` — existing helper already converts muxed accounts to the underlying `G...` address
-- `/Users/amisha.singla/go/pkg/mod/github.com/stellar/go-stellar-sdk@v0.0.0-20251211085638-ba09a6a91775/xdr/muxed_account.go:GetAddress:118-147` — SDK returns `M...` strkeys for `KEY_TYPE_MUXED_ED25519`
+- `internal/transform/transaction.go:TransformTransaction:151-159` — captures the Soroban fee payer with `MuxedAccount.Address()`
+- `internal/transform/transaction.go:TransformTransaction:177-184` — derives `inclusion_fee_charged` and V3 refund data from matched fee-account balance deltas
+- `internal/transform/transaction.go:TransformTransaction:198-202` — derives V4 refund data from the same string-matched balance scan
+- `internal/transform/transaction.go:getAccountBalanceFromLedgerEntryChanges:306-333` — compares ledger-entry `AccountId.Address()` values against the supplied fee-account string
 
-## Evidence
+## PoC
 
-The transform already uses `GetAccountAddressFromMuxedAccount()` for the exported `account` field, showing the codebase knows muxed accounts must be normalized for account-level data. But the fee-reconciliation branch bypasses that helper and uses `MuxedAccount.Address()` directly. The downstream balance scan then compares that `M...` string to ledger-entry `AccountId.Address()` output, which can only be `G...`, so no balance change can match for a muxed fee payer.
-
-## Anti-Evidence
-
-Most existing transaction fixtures use unmuxed fee payers, so the happy path continues to produce correct values and existing tests pass. Non-Soroban transactions also avoid this branch entirely, so the corruption is limited to Soroban fee accounting rather than every transaction row.
-
----
-
-## Review
-
-**Verdict**: VIABLE
-**Severity**: Critical
-**Date**: 2026-04-11
-**Reviewed by**: claude-opus-4-6, high
-**Novelty**: PASS — not previously investigated
-
-### Trace Summary
-
-Traced the complete Soroban fee reconciliation path in `TransformTransaction()`. At lines 154 and 158, `feeAccountAddress` is set via `MuxedAccount.Address()`, which the SDK confirms returns `M...` strkeys for muxed accounts (SDK `muxed_account.go:136-147`). The downstream `getAccountBalanceFromLedgerEntryChanges()` at line 318 compares this against `AccountId.Address()`, which the SDK confirms always returns `G...` strkeys (`account_id.go:28-35`). The string mismatch means both balance lookups return zero, producing `inclusionFeeCharged = -resourceFee` and `resourceFeeRefund = 0`. The same codebase already normalizes muxed addresses correctly at line 30 (`GetAccountAddressFromMuxedAccount`) and line 286 (`.ToAccountId()`), proving this is an oversight in the fee path.
-
-### Code Paths Examined
-
-- `internal/transform/transaction.go:154` — `feeAccountAddress = sourceAccount.Address()` returns `M...` for muxed source accounts
-- `internal/transform/transaction.go:157-158` — `feeAccountAddress = feeBumpAccount.Address()` returns `M...` for muxed fee-bump accounts
-- `internal/transform/transaction.go:177` — passes `feeAccountAddress` to `getAccountBalanceFromLedgerEntryChanges` for initial fee charge lookup
-- `internal/transform/transaction.go:183,201` — passes same `feeAccountAddress` for resource fee refund lookup (V3 and V4 meta paths)
-- `internal/transform/transaction.go:306-333` — `getAccountBalanceFromLedgerEntryChanges` compares `accountEntry.AccountId.Address()` (always `G...`) against `sourceAccountAddress` (could be `M...`)
-- `go-stellar-sdk/xdr/muxed_account.go:136-147` — SDK `GetAddress()` encodes with `VersionByteMuxedAccount` for muxed type, producing `M...` strkey
-- `go-stellar-sdk/xdr/account_id.go:28-35` — SDK `GetAddress()` encodes with `VersionByteAccountID`, always producing `G...` strkey
-- `internal/utils/main.go:50-53` — `GetAccountAddressFromMuxedAccount()` correctly normalizes via `ToAccountId()`, producing `G...`
-- `internal/transform/transaction.go:30` — `outputAccount` correctly uses `GetAccountAddressFromMuxedAccount()` (proof the codebase knows the pattern)
-- `internal/transform/transaction.go:285-286` — Fee-bump detail section correctly uses `.ToAccountId()` (further proof of the oversight)
-
-### Findings
-
-The bug is confirmed at all three call sites where `feeAccountAddress` is used for balance lookups:
-1. **Line 177** (FeeChanges lookup): `initialFeeCharged = 0 - 0 = 0`, so `outputInclusionFeeCharged = 0 - resourceFee = -resourceFee`. This produces a **negative inclusion fee** — a physically impossible value that will corrupt any downstream fee analysis.
-2. **Line 183** (V3 TxChangesAfter lookup): `outputResourceFeeRefund = 0 - 0 = 0`. Any actual refund is lost.
-3. **Line 201** (V4 TxChangesAfter + PostTxApplyFeeChanges lookup): Same zero result, refund lost.
-
-The fix is to normalize `feeAccountAddress` at lines 154 and 158 by using either `GetAccountAddressFromMuxedAccount()` or `sourceAccount.ToAccountId().Address()` / `feeBumpAccount.ToAccountId().Address()`.
-
-### PoC Guidance
-
-- **Test file**: `internal/transform/transaction_test.go`
-- **Setup**: Create a `LedgerTransaction` with a muxed source account (`CryptoKeyTypeKeyTypeMuxedEd25519`) and valid Soroban data. Populate `FeeChanges` with ledger entry changes containing the underlying `G...` account ID with non-zero balance delta. Set `sorobanData.ResourceFee` to a known value (e.g., 38233).
-- **Steps**: Call `TransformTransaction(transaction, lhe)` with the muxed-source Soroban transaction.
-- **Assertion**: Assert that `result.InclusionFeeCharged` equals the expected positive value (initial fee charged minus resource fee), NOT the negative value `-38233`. Assert `result.ResourceFeeRefund` equals the expected refund amount, NOT zero. Also test the fee-bump variant by constructing a `FeeBump` envelope with a muxed `FeeBumpAccount`.
-
----
-
-## PoC Attempt
-
-**Result**: POC_PASS
-**Date**: 2026-04-11
-**PoC by**: claude-opus-4-6, high
-**Target Test File**: internal/transform/data_integrity_poc_test.go
-**Test Name**: "TestMuxedFeeAccountBreaksSorobanFeeReconciliation" and "TestMuxedFeeBumpAccountBreaksSorobanFeeReconciliation"
-**Test Language**: Go
-
-### Demonstration
-
-Both tests construct Soroban transactions with muxed fee-paying accounts (M... addresses) and ledger entry changes containing the underlying G... account ID with known balance deltas. When `TransformTransaction()` is called, it stores the M... address as `feeAccountAddress`, which fails to match the G... addresses in ledger entries. This causes `getAccountBalanceFromLedgerEntryChanges()` to return zero for both start and end balances, producing `InclusionFeeCharged = -38233` (a physically impossible negative fee) and `ResourceFeeRefund = 0` (losing the actual 10705 stroop refund). The correct values would be `InclusionFeeCharged = 300` and `ResourceFeeRefund = 10705`.
+- **Target test file**: `internal/transform/data_integrity_poc_test.go`
+- **Test name**: `TestMuxedFeeAccountBreaksSorobanFeeReconciliation` and `TestMuxedFeeBumpAccountBreaksSorobanFeeReconciliation`
+- **Test language**: go
+- **How to run**: Create the target test file with the test body below, then run `go build ./...` and `go test ./internal/transform/... -run 'TestMuxedFee(Account|BumpAccount)BreaksSorobanFeeReconciliation' -v`.
 
 ### Test Body
 
 ```go
+package transform
+
+import (
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/ingest"
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
 // TestMuxedFeeAccountBreaksSorobanFeeReconciliation demonstrates that when
 // a Soroban transaction's fee-paying account is muxed (M... address),
 // the fee reconciliation logic fails to match balance changes (which use
@@ -281,6 +229,10 @@ func TestMuxedFeeAccountBreaksSorobanFeeReconciliation(t *testing.T) {
 		t.Fatalf("TransformTransaction failed: %v", err)
 	}
 
+	// Expected correct values if muxed accounts were normalized:
+	// initialFeeCharged = initialBalance - balanceAfterFee = feeDeducted = 38533
+	// inclusionFeeCharged = initialFeeCharged - resourceFee = 38533 - 38233 = 300
+	// resourceFeeRefund = balanceAfterRefund - balanceAfterFee = refundAmount = 10705
 	expectedInclusionFeeCharged := feeDeducted - resourceFee // 300
 	expectedResourceFeeRefund := refundAmount                // 10705
 
@@ -289,6 +241,9 @@ func TestMuxedFeeAccountBreaksSorobanFeeReconciliation(t *testing.T) {
 
 	// BUG DEMONSTRATION: Because feeAccountAddress is "M..." but ledger entries
 	// contain "G..." account IDs, the balance lookup misses entirely.
+	// This causes initialFeeCharged=0, so:
+	//   inclusionFeeCharged = 0 - resourceFee = -38233 (negative!)
+	//   resourceFeeRefund = 0 (refund lost)
 	if result.InclusionFeeCharged == expectedInclusionFeeCharged {
 		t.Errorf("BUG NOT DEMONSTRATED: InclusionFeeCharged is correct (%d). "+
 			"The muxed account normalization may have been fixed.", result.InclusionFeeCharged)
@@ -304,6 +259,7 @@ func TestMuxedFeeAccountBreaksSorobanFeeReconciliation(t *testing.T) {
 			result.ResourceFeeRefund)
 	}
 
+	// The negative inclusion fee is the smoking gun — fees cannot be negative
 	if result.InclusionFeeCharged >= 0 {
 		t.Errorf("Expected negative InclusionFeeCharged (impossible value), got %d", result.InclusionFeeCharged)
 	}
@@ -316,6 +272,7 @@ func TestMuxedFeeAccountBreaksSorobanFeeReconciliation(t *testing.T) {
 // bug for the fee-bump variant: when FeeBumpAccount is muxed, the fee
 // reconciliation fails identically.
 func TestMuxedFeeBumpAccountBreaksSorobanFeeReconciliation(t *testing.T) {
+	// Create a muxed version of testAccount5 (used as fee-bump source)
 	muxedFeeBump := xdr.MuxedAccount{
 		Type: xdr.CryptoKeyTypeKeyTypeMuxedEd25519,
 		Med25519: &xdr.MuxedAccountMed25519{
@@ -419,6 +376,7 @@ func TestMuxedFeeBumpAccountBreaksSorobanFeeReconciliation(t *testing.T) {
 				},
 			},
 		},
+		// FeeChanges use the underlying G... account ID
 		FeeChanges: xdr.LedgerEntryChanges{
 			{
 				Type: xdr.LedgerEntryChangeTypeLedgerEntryState,
@@ -510,6 +468,7 @@ func TestMuxedFeeBumpAccountBreaksSorobanFeeReconciliation(t *testing.T) {
 	t.Logf("InclusionFeeCharged: got=%d, expected_correct=%d", result.InclusionFeeCharged, expectedInclusionFeeCharged)
 	t.Logf("ResourceFeeRefund: got=%d, expected_correct=%d", result.ResourceFeeRefund, expectedResourceFeeRefund)
 
+	// Same bug: muxed fee-bump account M... address won't match G... in ledger entries
 	if result.InclusionFeeCharged == expectedInclusionFeeCharged {
 		t.Errorf("BUG NOT DEMONSTRATED: InclusionFeeCharged is correct (%d). "+
 			"The muxed account normalization may have been fixed.", result.InclusionFeeCharged)
@@ -534,21 +493,22 @@ func TestMuxedFeeBumpAccountBreaksSorobanFeeReconciliation(t *testing.T) {
 }
 ```
 
-### Test Output
+## Expected vs Actual Behavior
 
-```
-=== RUN   TestMuxedFeeAccountBreaksSorobanFeeReconciliation
-    data_integrity_poc_test.go:32: Muxed address: MCEODJVUUVYVFD5KT4TOEDTMXQ76OPFOQC2EMYYMLPXQCUVPOB6XQAAAAAAN5LN6567SC
-    data_integrity_poc_test.go:33: G... address:  GCEODJVUUVYVFD5KT4TOEDTMXQ76OPFOQC2EMYYMLPXQCUVPOB6XRWPQ
-    data_integrity_poc_test.go:198: InclusionFeeCharged: got=-38233, expected_correct=300
-    data_integrity_poc_test.go:199: ResourceFeeRefund: got=0, expected_correct=10705
-    data_integrity_poc_test.go:226: BUG CONFIRMED: Muxed fee account produces InclusionFeeCharged=-38233 (negative!) and ResourceFeeRefund=0 (should be 10705)
---- PASS: TestMuxedFeeAccountBreaksSorobanFeeReconciliation (0.00s)
-=== RUN   TestMuxedFeeBumpAccountBreaksSorobanFeeReconciliation
-    data_integrity_poc_test.go:427: InclusionFeeCharged: got=-38233, expected_correct=300
-    data_integrity_poc_test.go:428: ResourceFeeRefund: got=0, expected_correct=10705
-    data_integrity_poc_test.go:450: BUG CONFIRMED: Muxed fee-bump account produces InclusionFeeCharged=-38233 (negative!) and ResourceFeeRefund=0 (should be 10705)
---- PASS: TestMuxedFeeBumpAccountBreaksSorobanFeeReconciliation (0.00s)
-PASS
-ok  	github.com/stellar/stellar-etl/v2/internal/transform	(cached)
-```
+- **Expected**: Fee reconciliation should normalize muxed fee payers to their underlying `G...` account before matching ledger-entry balance changes, yielding the same fee breakdown as the unmuxed transaction (`inclusion_fee_charged = 300`, `resource_fee_refund = 10705` in the reproduced cases).
+- **Actual**: The code matches an `M...` fee payer against `G...` ledger entries, so both balance scans miss and export `inclusion_fee_charged = -38233` and `resource_fee_refund = 0`.
+
+## Adversarial Review
+
+1. Exercises claimed bug: YES — both tests call the production `TransformTransaction()` path and hit the exact Soroban fee-reconciliation logic that uses `feeAccountAddress`.
+2. Realistic preconditions: YES — Stellar XDR uses `MuxedAccount` for both `Transaction.SourceAccount` and `FeeBumpTransaction.FeeSource`, while ledger account entries are keyed by `AccountId`.
+3. Bug vs by-design: BUG — the same codebase already normalizes muxed accounts for the exported `account` field and fee-bump detail fields, so the raw `Address()` use in fee reconciliation is an inconsistent oversight rather than intended semantics.
+4. Final severity: Critical — the exported fee fields are numeric monetary values consumed by downstream reconciliation and can become negative or zero when they should be positive.
+5. In scope: YES — this is a concrete production code path that silently exports corrupt transaction fee data.
+6. Test correctness: CORRECT — the PoC constructs real transaction envelopes, uses production ledger-entry change structures, and demonstrates that changing only the fee-payer encoding changes the exported values.
+7. Alternative explanations: NONE
+8. Novelty: NOVEL
+
+## Suggested Fix
+
+Normalize `feeAccountAddress` before the balance scans. In `TransformTransaction()`, use `utils.GetAccountAddressFromMuxedAccount(sourceAccount)` / `utils.GetAccountAddressFromMuxedAccount(feeBumpAccount)` or `ToAccountId().Address()` instead of raw `MuxedAccount.Address()`.
