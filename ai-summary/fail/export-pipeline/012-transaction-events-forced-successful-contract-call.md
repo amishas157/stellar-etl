@@ -263,3 +263,31 @@ func TestTransactionEventForcedSuccessfulContractCall(t *testing.T) {
 FAIL
 FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.797s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-11
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Exercises claimed issue**: PARTIAL — the PoC reaches `transactionEvent2DiagnosticEvent()` and proves the exporter emits `Successful=false` together with `InSuccessfulContractCall=true` for `TransactionEvent` rows.
+2. **Realistic preconditions**: YES — upstream XDR defines `TransactionMetaV4.Events` as transaction-level fee/refund events, and upstream token-transfer tests model real fee events at `BEFORE_ALL_TXS` and `AFTER_ALL_TXS`.
+3. **Bug vs by-design**: BY DESIGN — `TransformContractEvent()` intentionally flattens `TransactionEvent`, operation `ContractEvent`, and `DiagnosticEvent` into one `ContractEventOutput` shape. The code explicitly says it is "opting to call all of these events contract events" and that `InSuccessfulContractCall` is set to `true` for classic events, so this is a deliberate projection choice, not corruption of an upstream field.
+4. **Impact/severity**: N/A — rejected because the underlying behavior is not a defect.
+5. **In scope**: YES — if this were a real correctness bug it would be in scope, but the finding does not establish one.
+6. **Test correctness**: INCORRECT FOR THE CLAIM — `xdr.TransactionEvent` has no `InSuccessfulContractCall` field at all. The PoC asserts that the exporter "should" synthesize `false`, but that expectation is not derived from source data; it is only one possible policy for a field the source type does not carry.
+7. **Alternative explanation**: YES — the `successful=false` plus `in_successful_contract_call=true` combination is fully explained by the exporter’s intentional flattening of heterogeneous event sources into a single contract-events schema with a synthetic boolean for transaction-level events.
+8. **Novelty**: NOT ASSESSED — duplicate handling is external to final review.
+
+### Rejection Reason
+
+The PoC proves current behavior, but it does not prove data corruption. `TransactionEvent` rows do not have an upstream `inSuccessfulContractCall` bit to preserve, so the exporter must invent some value when projecting them into `ContractEventOutput`. This repository intentionally chose `true` for classic transaction-level events, making the finding a disagreement with schema design rather than a correctness bug.
+
+### Failed Checks
+
+3, 6, 7

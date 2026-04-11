@@ -70,3 +70,201 @@ Traced the complete path from `GetTransactionEvents()` in the upstream SDK throu
 - **Setup**: Construct a V3 `ingest.LedgerTransaction` where `SorobanMeta.Events` contains a contract event (type=Contract) and `SorobanMeta.DiagnosticEvents` contains a DiagnosticEvent wrapping an identical ContractEvent. This mirrors real-world behavior when diagnostic events include contract events.
 - **Steps**: Call `TransformContractEvent(transaction, header)` and count the output rows.
 - **Assertion**: Assert that the number of output rows equals the number of *unique* events, not the sum of all arrays. Alternatively, assert that each output row has a `source_stream` field or that duplicate events are tagged/filtered. The existing test at lines 58-92 already demonstrates the bug — it expects 2 rows for 1 unique event.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestContractEventDiagnosticDoubleCount"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a V3 Soroban transaction with a single contract event placed in both `SorobanMeta.Events` and `SorobanMeta.DiagnosticEvents`, mirroring the documented upstream behavior. `TransformContractEvent()` produces 2 output rows for this 1 unique event — one with `OperationID` set (from the OperationEvents loop) and one with null `OperationID` (from the DiagnosticEvents loop). This confirms the double-counting bug and the inconsistent OperationID on duplicate rows.
+
+### Test Body
+
+```go
+func TestContractEventDiagnosticDoubleCount(t *testing.T) {
+	hardCodedBool := true
+
+	// Construct a single contract event that will appear in BOTH
+	// SorobanMeta.Events and SorobanMeta.DiagnosticEvents.
+	// This mirrors real-world behavior where diagnostic events include contract events.
+	sharedEvent := xdr.ContractEvent{
+		Ext:        xdr.ExtensionPoint{V: 0},
+		ContractId: &xdr.ContractId{},
+		Type:       xdr.ContractEventTypeContract,
+		Body: xdr.ContractEventBody{
+			V: 0,
+			V0: &xdr.ContractEventV0{
+				Topics: []xdr.ScVal{
+					{
+						Type: xdr.ScValTypeScvBool,
+						B:    &hardCodedBool,
+					},
+				},
+				Data: xdr.ScVal{
+					Type: xdr.ScValTypeScvBool,
+					B:    &hardCodedBool,
+				},
+			},
+		},
+	}
+
+	// Place the SAME event in both SorobanMeta.Events and SorobanMeta.DiagnosticEvents.
+	// The SDK's GetTransactionEvents() will return it in OperationEvents (from Events)
+	// AND in DiagnosticEvents (from DiagnosticEvents).
+	txMetaV3 := xdr.TransactionMetaV3{
+		SorobanMeta: &xdr.SorobanTransactionMeta{
+			Events: []xdr.ContractEvent{sharedEvent},
+			DiagnosticEvents: []xdr.DiagnosticEvent{
+				{
+					InSuccessfulContractCall: true,
+					Event:                    sharedEvent,
+				},
+			},
+		},
+	}
+
+	hardCodedMemoText := "test"
+	hardCodedTransactionHash := xdr.Hash([32]byte{0xaa})
+	genericResultResults := &[]xdr.OperationResult{
+		{
+			Tr: &xdr.OperationResultTr{
+				Type: xdr.OperationTypeCreateAccount,
+				CreateAccountResult: &xdr.CreateAccountResult{
+					Code: 0,
+				},
+			},
+		},
+	}
+
+	destination := xdr.MuxedAccount{
+		Type:    xdr.CryptoKeyTypeKeyTypeEd25519,
+		Ed25519: &xdr.Uint256{1, 2, 3},
+	}
+
+	transaction := ingest.LedgerTransaction{
+		Index: 1,
+		UnsafeMeta: xdr.TransactionMeta{
+			V:  3,
+			V3: &txMetaV3,
+		},
+		Envelope: xdr.TransactionEnvelope{
+			Type: xdr.EnvelopeTypeEnvelopeTypeTx,
+			V1: &xdr.TransactionV1Envelope{
+				Tx: xdr.Transaction{
+					Ext: xdr.TransactionExt{
+						V: 1,
+						SorobanData: &xdr.SorobanTransactionData{
+							Ext:         xdr.SorobanTransactionDataExt{},
+							Resources:   xdr.SorobanResources{},
+							ResourceFee: 0,
+						},
+					},
+					SourceAccount: testAccount1,
+					SeqNum:        112351890582290871,
+					Memo: xdr.Memo{
+						Type: xdr.MemoTypeMemoText,
+						Text: &hardCodedMemoText,
+					},
+					Fee: 90000,
+					Cond: xdr.Preconditions{
+						Type: xdr.PreconditionTypePrecondTime,
+						TimeBounds: &xdr.TimeBounds{
+							MinTime: 0,
+							MaxTime: 1594272628,
+						},
+					},
+					Operations: []xdr.Operation{
+						{
+							SourceAccount: &testAccount2,
+							Body: xdr.OperationBody{
+								Type: xdr.OperationTypePathPaymentStrictReceive,
+								PathPaymentStrictReceiveOp: &xdr.PathPaymentStrictReceiveOp{
+									Destination: destination,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Result: xdr.TransactionResultPair{
+			TransactionHash: hardCodedTransactionHash,
+			Result: xdr.TransactionResult{
+				FeeCharged: 300,
+				Result: xdr.TransactionResultResult{
+					Code:    xdr.TransactionResultCodeTxFailed,
+					Results: genericResultResults,
+				},
+			},
+		},
+	}
+
+	header := xdr.LedgerHeaderHistoryEntry{
+		Header: xdr.LedgerHeader{
+			LedgerSeq: 30521816,
+			ScpValue:  xdr.StellarValue{CloseTime: 1594272522},
+		},
+	}
+
+	// Run the production transform
+	output, err := TransformContractEvent(transaction, header)
+	if err != nil {
+		t.Fatalf("TransformContractEvent returned unexpected error: %v", err)
+	}
+
+	// There is only 1 unique underlying contract event, but the transform
+	// processes it from both OperationEvents and DiagnosticEvents arrays.
+	uniqueEventCount := 1
+
+	// BUG: The transform produces 2 rows for 1 unique event.
+	// The OperationEvents loop emits the event with OperationID set,
+	// and the DiagnosticEvents loop emits it again with OperationID null.
+	if len(output) <= uniqueEventCount {
+		t.Fatalf("Expected double-counted output (>%d rows), but got %d rows. "+
+			"If this fails, the deduplication bug may have been fixed.", uniqueEventCount, len(output))
+	}
+
+	t.Logf("BUG CONFIRMED: 1 unique event produced %d output rows (expected 1)", len(output))
+
+	// Further verify the duplicate rows differ in OperationID — showing inconsistent data
+	hasOperationID := false
+	hasNullOperationID := false
+	for _, row := range output {
+		if row.OperationID.Valid {
+			hasOperationID = true
+		} else {
+			hasNullOperationID = true
+		}
+	}
+
+	if !hasOperationID || !hasNullOperationID {
+		t.Errorf("Expected duplicate rows to have inconsistent OperationID "+
+			"(one set, one null), but got hasOperationID=%v, hasNullOperationID=%v",
+			hasOperationID, hasNullOperationID)
+	}
+
+	t.Logf("Duplicate rows have inconsistent OperationID: one has it set, one has it null")
+	t.Logf("Row 0 OperationID: valid=%v value=%v", output[0].OperationID.Valid, output[0].OperationID.Int64)
+	t.Logf("Row 1 OperationID: valid=%v value=%v", output[1].OperationID.Valid, output[1].OperationID.Int64)
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestContractEventDiagnosticDoubleCount
+    data_integrity_poc_test.go:159: BUG CONFIRMED: 1 unique event produced 2 output rows (expected 1)
+    data_integrity_poc_test.go:178: Duplicate rows have inconsistent OperationID: one has it set, one has it null
+    data_integrity_poc_test.go:179: Row 0 OperationID: valid=true value=131090201534533633
+    data_integrity_poc_test.go:180: Row 1 OperationID: valid=false value=0
+--- PASS: TestContractEventDiagnosticDoubleCount (0.00s)
+PASS
+```
