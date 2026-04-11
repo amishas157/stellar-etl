@@ -96,3 +96,47 @@ Empirically confirmed: running `schema.NewSchemaHandlerFromStruct(new(ContractDa
 - **Setup**: Import `github.com/xitongsys/parquet-go/schema`
 - **Steps**: Call `schema.NewSchemaHandlerFromStruct(new(ContractDataOutputParquet))` and check the returned error
 - **Assertion**: Assert that `err` is non-nil and contains `"not a valid Type string"`, demonstrating that the Parquet writer cannot be constructed for `ContractDataOutputParquet`
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestContractDataParquetSchemaInvalid"
+**Test Language**: Go
+
+### Demonstration
+
+The test calls `schema.NewSchemaHandlerFromStruct(new(ContractDataOutputParquet))` using the production Parquet struct and confirms that parquet-go returns an error containing "not a valid Type string". This proves that any `--write-parquet` export of contract-data ledger entries will fail at writer initialization, aborting the entire export job via `cmdLogger.Fatal` before a single row is written.
+
+### Test Body
+
+```go
+func TestContractDataParquetSchemaInvalid(t *testing.T) {
+	_, err := schema.NewSchemaHandlerFromStruct(new(ContractDataOutputParquet))
+	if err == nil {
+		t.Fatal("expected schema creation to fail for ContractDataOutputParquet, but it succeeded")
+	}
+	if !strings.Contains(err.Error(), "not a valid Type string") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+	t.Logf("BUG CONFIRMED: ContractDataOutputParquet schema creation failed: %v", err)
+	t.Logf("The interface{} fields (Key, KeyDecoded, Val, ValDecoded) tagged with type=MAP cannot be handled by parquet-go")
+	t.Logf("Any --write-parquet export of contract-data ledger entries will abort before the first row is written")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestContractDataParquetSchemaInvalid
+    data_integrity_poc_test.go:267: BUG CONFIRMED: ContractDataOutputParquet schema creation failed: failed to create schema from tag map: type MAP: not a valid Type string
+    data_integrity_poc_test.go:268: The interface{} fields (Key, KeyDecoded, Val, ValDecoded) tagged with type=MAP cannot be handled by parquet-go
+    data_integrity_poc_test.go:269: Any --write-parquet export of contract-data ledger entries will abort before the first row is written
+--- PASS: TestContractDataParquetSchemaInvalid (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.746s
+```
