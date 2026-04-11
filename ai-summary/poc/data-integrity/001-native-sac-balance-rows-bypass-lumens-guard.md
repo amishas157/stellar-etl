@@ -74,3 +74,66 @@ The bug is confirmed. The local `ContractBalanceFromContractData` was derived fr
 - **Setup**: Use `sac.BalanceToContractData(nativeContractID, holderID, amount)` from `go-stellar-sdk/ingest/sac` to create a native-asset balance ledger entry where `nativeContractID` is computed from `xdr.MustNewNativeAsset().ContractID(passphrase)`. Create a `TransformContractDataStruct` initialized with the **real** `ContractBalanceFromContractData` (not the mock).
 - **Steps**: Call `ContractBalanceFromContractData(nativeBalanceEntry, passphrase)` directly. Then call `TransformContractData` with a change containing the native balance entry.
 - **Assertion**: Assert that `ContractBalanceFromContractData` returns `false` for native balance entries (currently it returns `true`). Assert that the transformed output has empty `ContractDataBalanceHolder` and `ContractDataBalance` fields for native entries.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestNativeSACBalanceBypassesLumensGuard"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a native-asset SAC balance ledger entry using `sac.BalanceToContractData` with the native contract ID derived from `xdr.MustNewNativeAsset().ContractID(passphrase)`. It then calls the real `ContractBalanceFromContractData` and observes that it returns `ok=true` with `balance=1000000`, proving that native balance rows are accepted rather than rejected. The upstream SDK version rejects these rows with an explicit guard that was accidentally dropped in the local copy.
+
+### Test Body
+
+```go
+func TestNativeSACBalanceBypassesLumensGuard(t *testing.T) {
+	const passphrase = "Test SDF Network ; September 2015"
+
+	// 1. Compute the native-asset contract ID (same as line 312 of contract_data.go)
+	nativeContractID, err := xdr.MustNewNativeAsset().ContractID(passphrase)
+	if err != nil {
+		t.Fatalf("failed to compute native asset contract ID: %v", err)
+	}
+
+	// 2. Build a balance entry keyed to the native-asset contract
+	holderID := [32]byte{0xAA}
+	amount := uint64(1_000_000)
+	balanceData := sac.BalanceToContractData(nativeContractID, holderID, amount)
+
+	ledgerEntry := xdr.LedgerEntry{
+		LastModifiedLedgerSeq: 100,
+		Data:                  balanceData,
+	}
+
+	// 3. Call the real (non-mocked) ContractBalanceFromContractData
+	_, balance, ok := ContractBalanceFromContractData(ledgerEntry, passphrase)
+
+	// 4. The upstream SAC helper returns false for native balance rows.
+	//    The local copy returns true — demonstrating the bug.
+	if ok && balance != nil {
+		t.Errorf("BUG CONFIRMED: ContractBalanceFromContractData accepted a native-asset "+
+			"balance row (ok=%v, balance=%s). "+
+			"Expected ok=false for native/lumens balance entries, matching upstream behavior.",
+			ok, balance.String())
+	} else {
+		t.Logf("Native balance row correctly rejected (ok=%v)", ok)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestNativeSACBalanceBypassesLumensGuard
+    data_integrity_poc_test.go:102: BUG CONFIRMED: ContractBalanceFromContractData accepted a native-asset balance row (ok=true, balance=1000000). Expected ok=false for native/lumens balance entries, matching upstream behavior.
+--- FAIL: TestNativeSACBalanceBypassesLumensGuard (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.797s
+```

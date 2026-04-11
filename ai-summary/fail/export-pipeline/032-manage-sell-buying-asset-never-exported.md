@@ -199,3 +199,34 @@ func TestManageSellOfferBuyingAssetNeverExported(t *testing.T) {
 FAIL
 FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.816s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-11
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Does the PoC actually exercise the claimed issue?** Partially. It correctly exercises the `TransformAsset()` branch for `ManageSellOffer` and proves that the function returns the selling-side asset, but it does not establish that the export is required to emit the buying-side asset.
+2. **Are the preconditions realistic?** Yes. A `ManageSellOffer` that sells native XLM and buys a credit asset is a normal Stellar operation shape.
+3. **Is the behavior a bug or by design?** By design. The command, reader names, comments, and README consistently describe `export_assets` as exporting assets created from payment operations, not as a complete asset-discovery export over both sides of offer operations.
+4. **Does the impact match the claimed severity?** No. Because the finding never establishes that buy-side offer assets are in the command's intended output contract, there is no demonstrated structural corruption to rate as High.
+5. **Is the finding in scope?** Only if it were a real correctness defect. The current evidence shows an implementation/documentation scope mismatch theory, not proven wrong output.
+6. **Is the test itself correct?** Not as bug proof. The test fails by asserting a stronger contract than the repository documents; it proves the implementation chooses `ManageSellOffer.Selling`, but not that this choice violates a requirement.
+7. **Can the results be explained WITHOUT the claimed issue?** Yes. A benign explanation is that `export_assets` is intentionally a narrow payment-oriented asset-reference export and that the `ManageSellOffer` support is legacy or limited behavior rather than a promise to enumerate both assets in an offer.
+8. **Is this finding novel?** Possibly, but novelty does not matter once the semantics do not support the claimed bug.
+
+### Rejection Reason
+
+The PoC shows what the code does, but it does not prove that the code is wrong. In this repository, `export_assets` is documented and named around payment-operation asset export, and nothing in the product contract says a `ManageSellOffer` must emit its buying asset or both offer-side assets. Without that requirement, the observed result is explainable as intentionally narrow behavior rather than silent data corruption.
+
+### Failed Checks
+
+- 3. Behavior is by design rather than a demonstrated correctness bug
+- 4. Claimed High impact is unsupported because no documented output requirement was violated
+- 6. Test proves implementation behavior, not incorrect output against the command contract
+- 7. The observed result has a benign explanation consistent with the command's documented scope
