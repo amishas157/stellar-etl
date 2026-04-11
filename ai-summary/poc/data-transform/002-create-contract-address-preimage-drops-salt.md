@@ -69,3 +69,141 @@ The salt is a 256-bit value that, combined with the deployer address and network
 - **Setup**: Construct a `LedgerTransaction` with an `InvokeHostFunction` operation of type `HostFunctionTypeHostFunctionTypeCreateContract`, using a `ContractIdPreimage` of type `FROM_ADDRESS` with a non-zero `Salt` value (e.g., `xdr.Uint256{0x01, 0x02, ...}`)
 - **Steps**: Call `TransformOperation()` on the constructed transaction and inspect the returned `OperationOutput.OperationDetails` map
 - **Assertion**: Assert that `details["salt"]` exists and equals the hex-encoded salt value. Currently it will be absent, proving the omission. The fix is to add `details["salt"] = fromAddress.Salt.String()` in the `FROM_ADDRESS` case of `switchContractIdPreimageType()`.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestCreateContractFromAddressDropsSalt"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `create_contract` operation with a `FROM_ADDRESS` preimage containing a non-zero 256-bit salt, runs it through `TransformOperation()`, and verifies the output details map. The `salt` key is completely absent from the output, confirming that `switchContractIdPreimageType()` silently drops the `Salt` field from `ContractIdPreimageFromAddress`. This means two contract deployments from the same address with different salts produce indistinguishable preimage payloads in the exported data.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/ingest"
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestCreateContractFromAddressDropsSalt demonstrates that switchContractIdPreimageType
+// omits the Salt field from ContractIdPreimageFromAddress, causing the exported
+// operation details to silently discard a 256-bit value that is required to
+// reconstruct the contract ID derivation path.
+func TestCreateContractFromAddressDropsSalt(t *testing.T) {
+	// 1. Construct a non-zero salt that is clearly distinguishable
+	salt := xdr.Uint256{
+		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+		0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+		0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+		0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+	}
+	expectedSaltStr := salt.String() // big-int decimal representation
+
+	// 2. Build a create_contract operation with FROM_ADDRESS preimage and the salt
+	createContractOp := xdr.Operation{
+		SourceAccount: &genericSourceAccount,
+		Body: xdr.OperationBody{
+			Type: xdr.OperationTypeInvokeHostFunction,
+			InvokeHostFunctionOp: &xdr.InvokeHostFunctionOp{
+				HostFunction: xdr.HostFunction{
+					Type: xdr.HostFunctionTypeHostFunctionTypeCreateContract,
+					CreateContract: &xdr.CreateContractArgs{
+						ContractIdPreimage: xdr.ContractIdPreimage{
+							Type: xdr.ContractIdPreimageTypeContractIdPreimageFromAddress,
+							FromAddress: &xdr.ContractIdPreimageFromAddress{
+								Address: xdr.ScAddress{
+									Type:       xdr.ScAddressTypeScAddressTypeContract,
+									ContractId: &xdr.ContractId{},
+								},
+								Salt: salt,
+							},
+						},
+						Executable: xdr.ContractExecutable{},
+					},
+				},
+			},
+		},
+	}
+
+	// 3. Build a minimal transaction envelope containing this operation
+	envelope := xdr.TransactionV1Envelope{
+		Tx: xdr.Transaction{
+			SourceAccount: genericSourceAccount,
+			Memo:          xdr.Memo{},
+			Operations:    []xdr.Operation{createContractOp},
+			Ext: xdr.TransactionExt{
+				V: 0,
+				SorobanData: &xdr.SorobanTransactionData{
+					Ext: xdr.SorobanTransactionDataExt{V: 0},
+					Resources: xdr.SorobanResources{
+						Footprint: xdr.LedgerFootprint{
+							ReadOnly:  []xdr.LedgerKey{},
+							ReadWrite: []xdr.LedgerKey{},
+						},
+					},
+					ResourceFee: 100,
+				},
+			},
+		},
+	}
+
+	txn := ingest.LedgerTransaction{
+		Index: 1,
+		Envelope: xdr.TransactionEnvelope{
+			Type: xdr.EnvelopeTypeEnvelopeTypeTx,
+			V1:   &envelope,
+		},
+		Result:     genericLedgerTransaction.Result,
+		UnsafeMeta: genericLedgerTransaction.UnsafeMeta,
+	}
+
+	ledgerCloseMeta := makeLedgerCloseMeta()
+
+	// 4. Run production code path
+	output, err := TransformOperation(createContractOp, 0, txn, 0, ledgerCloseMeta, "")
+	if err != nil {
+		t.Fatalf("TransformOperation returned unexpected error: %v", err)
+	}
+
+	// 5. Assert that the salt is present in operation details
+	saltVal, hasSalt := output.OperationDetails["salt"]
+	if !hasSalt {
+		t.Errorf("operation details missing 'salt' key — the 256-bit preimage salt is silently dropped.\n"+
+			"Expected salt: %s\nGot details keys: %v", expectedSaltStr, keys(output.OperationDetails))
+	} else if saltVal != expectedSaltStr {
+		t.Errorf("salt value mismatch: got %v, want %s", saltVal, expectedSaltStr)
+	}
+}
+
+func keys(m map[string]interface{}) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	return ks
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestCreateContractFromAddressDropsSalt
+    data_integrity_poc_test.go:93: operation details missing 'salt' key — the 256-bit preimage salt is silently dropped.
+        Expected salt: 455867356320691211509944977504407603390036387149619137164185182714736811808
+        Got details keys: [from address function type ledger_key_hash contract_id contract_code_hash]
+--- FAIL: TestCreateContractFromAddressDropsSalt (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.774s
+```
