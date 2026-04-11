@@ -85,3 +85,4 @@
 - `external-io/007-trades-limit-counts-operations-not-trade-rows.md` — Medium — `export_trades --limit` counts trade-capable operations before emitted trade rows and can exceed the requested export bound
 - `external-io/008-export-entry-swallows-write-errors.md` — Medium — `ExportEntry` logs failed JSON writes but returns `nil`, so exporters treat dropped rows as successful
 - `export-pipeline/018-asset-limit-underfills-distinct-rows.md` — High — `export_assets --limit` can stop after a duplicate-heavy first ledger and emit fewer distinct asset rows than requested
+- `data-integrity/012-native-sac-balance-rows-bypass-lumens-guard.md` — High — native SAC balance rows populate unsupported `soroban_contract_data.balance_*` fields instead of being rejected like lumens rows in the upstream SAC parser
