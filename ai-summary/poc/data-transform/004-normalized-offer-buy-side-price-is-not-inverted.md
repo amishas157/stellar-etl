@@ -108,44 +108,54 @@ The test fixture at `offer_normalized_test.go:105-113` locks in the buggy behavi
 **Result**: POC_PASS
 **Date**: 2026-04-11
 **PoC by**: claude-opus-4-6, high
-**Target Test File**: internal/transform/data_integrity_poc_test.go
-**Test Name**: "TestBuySideNormalizedOfferCanonicalOrientationBug"
+**Target Test File**: internal/transform/data_integrity_poc_test.go (temporary; reverted after test run)
+**Test Name**: "TestBuySideNormalizedOfferPriceNotInverted"
 **Test Language**: Go
 
 ### Demonstration
 
-The test demonstrates the broader buy-side canonicalization bug in `extractDimOffer()`. `TransformOffer()` exposes `offer.Amount` as the selling-asset quantity and `offer.Price` as `buying / selling`. When `extractDimOffer()` determines `action = "b"` (the seller sells the canonical counter asset), it fails to remap those raw offer-side values into canonical `DimMarket` base/counter units. All three derived fields are affected: BaseAmount returns 262.8450327 (the native/counter quantity, not ETH/base), CounterAmount returns 135.16 (the ETH/base quantity, not native/counter), and Price returns 0.514 (base/counter = ETH/native, not counter/base = native/ETH). The mathematical invariant `CounterAmount = BaseAmount × Price` still holds with the buggy values, making the bug insidious — the row is internally consistent but semantically wrong relative to the canonical market labels.
+The test demonstrates that `extractDimOffer()` copies the raw offer-side price unchanged into `DimOffer.Price` for buy-side rows (`action="b"`), producing a value in base/counter units (ETH/native ≈ 0.514) instead of the counter/base units (native/ETH ≈ 1.945) required by the canonical `DimMarket` orientation. This is a distinct observable output defect from the BaseAmount/CounterAmount swap demonstrated in finding 021: the Price field carries the reciprocal of the expected value. The existing test fixture at `offer_normalized_test.go:105-113` locks in this buggy value, masking the defect. Any downstream analytics using `dim_offers.price` with `dim_markets.base_code`/`counter_code` will interpret the price ratio in the wrong direction for all buy-side offers.
+
+### Relationship to Finding 021
+
+Finding `data-transform/021-normalized-offer-buy-side-base-counter-amounts-swapped` demonstrated that `BaseAmount` and `CounterAmount` are swapped for buy-side offers. This finding (004) demonstrates the same root cause manifesting in the `Price` field: the raw `offer.Price` (buying/selling = base/counter) is not inverted to canonical counter/base for buy-side rows. While all three fields share the same root cause (no branching on `action` in `extractDimOffer()` lines 159–168), the Price inversion is a separately observable and independently impactful defect — a fix that only swaps BaseAmount/CounterAmount without also inverting Price would leave the row in a state where `CounterAmount ≠ BaseAmount × Price`.
 
 ### Test Body
 
 ```go
-func TestBuySideNormalizedOfferCanonicalOrientationBug(t *testing.T) {
-	// This test demonstrates that extractDimOffer() does not remap raw offer-side
-	// values into canonical base/counter orientation for buy-side rows (action="b").
+package transform
+
+import (
+	"math"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestBuySideNormalizedOfferPriceNotInverted(t *testing.T) {
+	// This test demonstrates that extractDimOffer() does not invert the raw
+	// offer-side price for buy-side rows (action="b"), producing a Price in
+	// base/counter units instead of the counter/base units implied by the
+	// canonical DimMarket orientation.
 	//
-	// TransformOffer() exposes:
-	//   offer.Amount = selling-asset quantity (in XLM for this fixture)
-	//   offer.Price  = buying-per-selling   (ETH per native for this fixture)
+	// The existing finding 021 demonstrated that BaseAmount and CounterAmount
+	// are swapped for buy-side offers. This test focuses specifically on the
+	// Price field, which suffers from the same root cause but is a distinct
+	// observable output defect: it carries the reciprocal of the expected value.
 	//
-	// extractDimOffer() alphabetically sorts assets to determine the canonical
-	// market: base=ETH, counter=native. Because sellingAsset (native) != assets[0]
-	// (ETH), action="b" is correctly assigned. However, the field assignments are
-	// identical for both "s" and "b" branches, so the raw offer-side values are
-	// never remapped:
-	//   BaseAmount    = offer.Amount              (native qty, labeled as base=ETH) WRONG
-	//   CounterAmount = offer.Amount * offer.Price (ETH qty, labeled as counter=native) WRONG
-	//   Price         = offer.Price               (ETH/native = base/counter) WRONG
+	// Fixture: selling=native, buying=ETH
+	//   offer.Amount = 2628450327 stroops = 262.8450327 native (selling-asset qty)
+	//   offer.Price  = 920936891/1790879058 ≈ 0.5142373444404865 (buying/selling = ETH/native)
 	//
-	// The correct canonical values for the ETH/native market with action="b" are:
-	//   BaseAmount    = offer.Amount * offer.Price (ETH qty ≈ 135.16)
-	//   CounterAmount = offer.Amount               (native qty = 262.84)
-	//   Price         = 1.0 / offer.Price          (native/ETH ≈ 1.9446)
+	// Canonical market (alphabetical sort): base=ETH, counter=native, action="b"
+	//
+	// For the canonical ETH/native market, Price should be counter/base = native/ETH.
+	// Since offer.Price = ETH/native (base/counter), the correct canonical Price
+	// is 1.0/offer.Price ≈ 1.944627341462424 (native per ETH).
+	//
+	// The code returns offer.Price = 0.5142373444404865 (ETH per native) unchanged.
 
 	// 1. Construct input using the existing test helper.
-	//    Selling = native (counter after alphabetical sort)
-	//    Buying  = ETH    (base after alphabetical sort)
-	//    Amount  = 2628450327 stroops = 262.8450327 native (the selling-asset qty)
-	//    Price   = 920936891/1790879058 ≈ 0.5142373444404865 (buying/selling = ETH/native)
 	input, err := makeOfferNormalizedTestInput()
 	assert.NoError(t, err)
 
@@ -153,65 +163,77 @@ func TestBuySideNormalizedOfferCanonicalOrientationBug(t *testing.T) {
 	result, err := TransformOfferNormalized(input, 100)
 	assert.NoError(t, err)
 
-	// Verify the canonical market orientation.
+	// Verify canonical market orientation and action.
 	assert.Equal(t, "ETH", result.Market.BaseCode, "base asset should be ETH")
 	assert.Equal(t, "native", result.Market.CounterCode, "counter asset should be native")
 	assert.Equal(t, "b", result.Offer.Action, "action should be 'b' (seller sells counter)")
 
-	// 3. Demonstrate the bug: ALL THREE derived fields are in the wrong orientation.
+	// 3. Demonstrate the Price bug.
 	//
-	// Correct canonical values:
-	correctBaseAmount := 135.16473161502083 // ETH quantity = offer.Amount × offer.Price
-	correctCounterAmount := 262.8450327     // native quantity = offer.Amount
-	correctPrice := 1.944627341462424       // native/ETH = 1/offer.Price (counter/base)
+	// For a canonical market where Price = counter/base:
+	//   Correct Price = native/ETH = 1/offer.Price ≈ 1.944627341462424
+	//   Actual Price  = ETH/native = offer.Price   ≈ 0.5142373444404865
+	//
+	// The raw offer.Price is buying/selling = ETH/native, which is base/counter.
+	// The canonical DimMarket schema expects counter/base, so Price should be inverted.
 
+	correctPrice := 1.944627341462424      // native/ETH = 1/offer.Price (counter/base)
+	rawOfferPrice := 0.5142373444404865     // ETH/native = offer.Price (base/counter)
 	const tolerance = 1e-6
 
-	// BUG 1: BaseAmount returns 262.84 (native/counter qty) instead of 135.16 (ETH/base qty).
-	// The code blindly copies offer.Amount (the selling-asset qty) without checking action.
-	baseAmountIsWrong := math.Abs(result.Offer.BaseAmount-correctBaseAmount) > tolerance
-	assert.True(t, baseAmountIsWrong,
-		"BaseAmount should be wrong: got %v, correct canonical value is %v",
-		result.Offer.BaseAmount, correctBaseAmount)
-	assert.InDelta(t, 262.8450327, result.Offer.BaseAmount, tolerance,
-		"BaseAmount contains the native (counter) quantity instead of ETH (base)")
+	// Assert the output matches the raw (wrong) offer-side price, not the correct canonical price.
+	assert.InDelta(t, rawOfferPrice, result.Offer.Price, tolerance,
+		"Price should contain the raw offer-side value (base/counter = ETH/native)")
 
-	// BUG 2: CounterAmount returns 135.16 (ETH/base qty) instead of 262.84 (native/counter qty).
-	// The code computes offer.Amount * offer.Price, which for this fixture yields the buying-asset qty.
-	counterAmountIsWrong := math.Abs(result.Offer.CounterAmount-correctCounterAmount) > tolerance
-	assert.True(t, counterAmountIsWrong,
-		"CounterAmount should be wrong: got %v, correct canonical value is %v",
-		result.Offer.CounterAmount, correctCounterAmount)
-	assert.InDelta(t, 135.16473161502083, result.Offer.CounterAmount, tolerance,
-		"CounterAmount contains the ETH (base) quantity instead of native (counter)")
-
-	// BUG 3: Price returns 0.514 (ETH/native = base/counter) instead of 1.945 (native/ETH = counter/base).
-	// The code copies offer.Price (buying-per-selling) without inverting for the "b" case.
-	priceIsWrong := math.Abs(result.Offer.Price-correctPrice) > tolerance
+	// Assert the output does NOT match the correct canonical price.
+	priceIsWrong := math.Abs(result.Offer.Price - correctPrice) > tolerance
 	assert.True(t, priceIsWrong,
-		"Price should be wrong: got %v, correct canonical value is %v",
+		"Price should differ from correct canonical value: got %v, correct is %v",
 		result.Offer.Price, correctPrice)
-	assert.InDelta(t, 0.5142373444404865, result.Offer.Price, tolerance,
-		"Price contains the raw offer-side value (base/counter) instead of counter/base")
 
-	// The mathematical invariant CounterAmount ≈ BaseAmount × Price holds even with
-	// the buggy values — this is why the bug is insidious. The row is internally
-	// consistent but semantically wrong relative to the canonical market labels.
-	invariant := result.Offer.BaseAmount * result.Offer.Price
-	assert.InDelta(t, result.Offer.CounterAmount, invariant, tolerance,
-		"CounterAmount should equal BaseAmount*Price even with buggy values")
+	// Verify that the correct price would be the reciprocal.
+	reciprocal := 1.0 / result.Offer.Price
+	assert.InDelta(t, correctPrice, reciprocal, tolerance,
+		"The reciprocal of the actual Price should equal the correct canonical Price")
 
-	// Any BigQuery query joining dim_offers.base_amount with dim_markets.base_code
-	// to aggregate "total ETH volume" will silently include native amounts from
-	// buy-side rows, corrupting financial analytics.
+	// The sell-side case (action="s") would be correct because offer.Price
+	// is already in the right orientation when the seller sells the base asset.
+	// This bug only manifests for buy-side offers where the raw price needs inversion.
 }
 ```
 
 ### Test Output
 
 ```
-=== RUN   TestBuySideNormalizedOfferCanonicalOrientationBug
---- PASS: TestBuySideNormalizedOfferCanonicalOrientationBug (0.00s)
+=== RUN   TestBuySideNormalizedOfferPriceNotInverted
+--- PASS: TestBuySideNormalizedOfferPriceNotInverted (0.00s)
 PASS
-ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.694s
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.817s
 ```
+
+---
+
+## Final Review — Needs Revision
+
+**Date**: 2026-04-11
+**Final review by**: gpt-5.4, high
+
+### What Needs Fixing
+
+The underlying code defect is real, but this hypothesis is not currently framed as a distinct finding. `extractDimOffer()` does not have a price-only bug: the same `action == "b"` branch also leaves `base_amount` and `counter_amount` in raw offer orientation. The repository's condensed success index already contains `data-transform/021-normalized-offer-buy-side-base-counter-amounts-swapped.md`, so this PoC currently overlaps an already-recorded broader buy-side canonicalization issue instead of establishing a separate new finding.
+
+The PoC metadata is also stale: the document points to `internal/transform/data_integrity_poc_test.go`, which does not exist in-tree. I had to create a temporary test file to rerun the production path, then revert it.
+
+### Revision Instructions
+
+1. Reframe this as a duplicate/subsumed issue under the broader buy-side canonicalization bug, or explain why `price` remains a distinct residual defect after accounting for the already-recorded `base_amount` / `counter_amount` swap.
+2. If you keep this file as a standalone candidate, update the hypothesis title, mechanism, and impact to describe the full buy-side canonicalization failure rather than only the price inversion.
+3. Replace the stale `Target Test File` metadata with a real target (for example `internal/transform/offer_normalized_test.go`) or explicitly say that the PoC requires a temporary test file.
+4. Keep the PoC focused on expected-vs-actual canonical semantics tied to `Market.BaseCode`, `Market.CounterCode`, and `Offer.Action`, not just "the current output is wrong because it differs from another calculation."
+
+### Checks Passed So Far
+
+- Code path exists: `extractDimOffer()` assigns identical `BaseAmount`, `CounterAmount`, and `Price` fields for both `action == "s"` and `action == "b"` in `internal/transform/offer_normalized.go:159-168`.
+- Trigger is realistic: the checked-in fixture in `internal/transform/offer_normalized_test.go:65-88` creates a real buy-side normalized row (`selling=native`, `buying=ETH`, `action="b"`).
+- Bug vs by-design: the output row labels the market as `base=ETH`, `counter=native`, but the buy-side offer values remain in raw selling/buying orientation, so the field semantics do not match the exported labels.
+- Impact is real: the exported normalized offer row can silently misstate canonical offer quantities and price for downstream analytics.
