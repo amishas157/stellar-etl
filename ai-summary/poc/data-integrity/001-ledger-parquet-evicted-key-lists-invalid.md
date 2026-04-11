@@ -84,3 +84,56 @@ EvictedLedgerKeysHash []string `parquet:"name=evicted_ledger_keys_hash, type=MAP
 - **Setup**: Import `github.com/xitongsys/parquet-go/schema`
 - **Steps**: Call `schema.NewSchemaHandlerFromStruct(new(LedgerOutputParquet))` and check the returned error
 - **Assertion**: Assert that `err` is non-nil and contains `"not a valid Type string"`, demonstrating that the Parquet writer cannot be constructed for `LedgerOutputParquet`
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestLedgerParquetEvictedKeyListsInvalid"
+**Test Language**: Go
+
+### Demonstration
+
+The test calls `schema.NewSchemaHandlerFromStruct(new(LedgerOutputParquet))` and confirms that the Parquet schema handler cannot be created due to the missing `valuetype` tag on the `EvictedLedgerKeysType` and `EvictedLedgerKeysHash` `[]string` fields. The error message "not a valid Type string" proves that `export_ledgers --write-parquet` will fatal before writing any Parquet data, causing complete data loss for ledger Parquet exports.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/xitongsys/parquet-go/schema"
+)
+
+func TestLedgerParquetEvictedKeyListsInvalid(t *testing.T) {
+	// Attempt to create a Parquet schema handler from LedgerOutputParquet.
+	// The EvictedLedgerKeysType and EvictedLedgerKeysHash fields are []string
+	// with tags that lack valuetype=BYTE_ARRAY, so parquet-go cannot derive
+	// the LIST child element type and should fail.
+	_, err := schema.NewSchemaHandlerFromStruct(new(LedgerOutputParquet))
+	if err == nil {
+		t.Fatal("expected schema creation to fail for LedgerOutputParquet due to missing valuetype on []string fields, but it succeeded")
+	}
+	if !strings.Contains(err.Error(), "not a valid Type string") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+	t.Logf("Schema creation failed as expected: %v", err)
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestLedgerParquetEvictedKeyListsInvalid
+    data_integrity_poc_test.go:22: Schema creation failed as expected: failed to create schema from tag map: type : not a valid Type string
+--- PASS: TestLedgerParquetEvictedKeyListsInvalid (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.874s
+```

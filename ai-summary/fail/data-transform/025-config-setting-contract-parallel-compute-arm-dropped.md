@@ -40,3 +40,31 @@ Unlike older arms, `ContractParallelCompute` is absent from both the transform l
 ## Anti-Evidence
 
 If current ledgers do not yet emit `config_setting_id = 14`, the issue will not show up in today's sample exports. But once the arm appears, the export path will not fail loudly; it will emit a normal-looking row with the arm payload missing.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-11
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of `ai-summary/success/data-integrity/005-config-parallel-compute-empty-shell.md.gh-published`
+**Failed At**: reviewer
+
+### Trace Summary
+
+This hypothesis describes the exact same bug as the already-published finding `data-integrity/005-config-parallel-compute-empty-shell`. Both identify that `TransformConfigSetting()` never calls `GetContractParallelCompute()`, that `ConfigSettingOutput` has no field for `LedgerMaxDependentTxClusters`, and that config_setting_id=14 rows are emitted as empty shells with only metadata. The published finding already includes a complete PoC test, adversarial review, and suggested fix.
+
+### Code Paths Examined
+
+- `internal/transform/config_setting.go:24-107` — confirmed no call to `GetContractParallelCompute()`
+- `internal/transform/schema.go:563-627` — confirmed no `LedgerMaxDependentTxClusters` field in `ConfigSettingOutput`
+- `ai-summary/success/data-integrity/005-config-parallel-compute-empty-shell.md.gh-published` — identical root cause, mechanism, affected code, and impact
+
+### Why It Failed
+
+This is a duplicate of an already-confirmed and published finding. The published success file `data-integrity/005-config-parallel-compute-empty-shell` covers the identical root cause (missing `GetContractParallelCompute()` call), the identical affected schema (no destination column for `ledger_max_dependent_tx_clusters`), and the identical impact (empty shell rows for config_setting_id=14). No new information is contributed by this hypothesis.
+
+### Lesson Learned
+
+Cross-check `ai-summary/success/` across all subsystems (not just the target subsystem) before submitting, as the same underlying bug may have been discovered and published under a different subsystem classification (here `data-integrity` vs `data-transform`).

@@ -14,7 +14,7 @@ When `ContractDataOutput.ToParquet()` converts a contract-data record for parque
 
 `TransformContractData()` computes `LedgerKeyHashBase64`, and the corresponding JSON tests assert it. But the parquet struct `ContractDataOutputParquet` and its `ToParquet()` converter have no destination for that field. The value is silently discarded during the conversion.
 
-**Important caveat**: In the live export pipeline, `ContractDataOutputParquet` uses MAP-typed parquet tags (`Key`, `KeyDecoded`, `Val`, `ValDecoded`) that cause `writer.NewParquetWriter()` to fail with `"type MAP: not a valid Type string"`. This means the export pipeline crashes before writing any contract_data parquet rows. The `LedgerKeyHashBase64` omission is therefore a **latent bug** — it would manifest if the MAP-type writer-init issue were fixed first.
+**Important caveat**: In the live export pipeline, `ContractDataOutputParquet` uses MAP-typed parquet tags (`Key`, `KeyDecoded`, `Val`, `ValDecoded`) that cause `writer.NewParquetWriter()` to fail with `"type MAP: not a valid Type string"`. This means the export pipeline crashes before writing any contract_data parquet rows. The `LedgerKeyHashBase64` omission is therefore a **latent bug** — it would manifest if the MAP issue were fixed first.
 
 ## Trigger
 
@@ -188,3 +188,35 @@ func fieldExists(t reflect.Type, name string) bool {
 PASS
 ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.715s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-11
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Exercises claimed bug**: PARTIAL — a direct unit call to `ContractDataOutput.ToParquet()` does show that `LedgerKeyHashBase64` has no destination field in `ContractDataOutputParquet`. But the production export path in `cmd.WriteParquet()` creates the parquet writer before it ever iterates records and calls `record.ToParquet()`.
+2. **Realistic preconditions**: NO — the PoC bypasses the real export path by calling `ToParquet()` directly on a handcrafted struct. In normal operation, `writer.NewParquetWriter()` fails first for `ContractDataOutputParquet`, so the converter is never reached for contract-data parquet output.
+3. **Bug vs by-design**: UNRESOLVED — the schema mismatch is likely accidental, but current behavior is dominated by the writer-init failure. The review does not need to prove intentional design because the alleged corruption is unreachable today.
+4. **Impact matches claimed severity**: NO — this is not a current Medium-or-higher data-integrity issue. The live behavior is an immediate writer initialization failure, not silent wrong output. The missing field is a latent inconsistency that would matter only after a separate bug is fixed.
+5. **In scope**: NO — the objective explicitly excludes theoretical issues without a concrete current code path producing wrong output. This finding depends on a hypothetical future fix to the MAP-tag writer failure.
+6. **Test correctness**: INSUFFICIENT FOR CONFIRMATION — the PoC proves struct/schema drift by reflection and separately proves writer-init failure. It does not demonstrate an actual emitted parquet record with a wrong/missing `ledger_key_hash_base_64` value.
+7. **Alternative explanations**: YES — the observed behavior is fully explained by unreachable conversion in the production path. `cmd.WriteParquet()` aborts at `writer.NewParquetWriter()` before any `record.ToParquet()` call for contract-data rows.
+8. **Novelty**: NOT MATERIAL — even if novel, the finding still fails scope and impact checks.
+
+### Rejection Reason
+
+The PoC demonstrates a latent schema mismatch in an unreachable converter path, not a current data-integrity bug. `cmd.WriteParquet()` calls `writer.NewParquetWriter()` before `record.ToParquet()`, and that initialization already fails for `ContractDataOutputParquet`, so the system never silently emits contract-data parquet rows missing `ledger_key_hash_base_64`.
+
+### Failed Checks
+
+- 2. Realistic preconditions
+- 4. Impact matches claimed severity
+- 5. In scope
+- 6. Test correctness as proof of wrong output
+- 7. Alternative explanations

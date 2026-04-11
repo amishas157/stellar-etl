@@ -41,3 +41,31 @@ The current transform is written as a flat field grabber for the older config-se
 ## Anti-Evidence
 
 If the exported ledger range never includes `config_setting_id = 13`, the corruption stays latent. But the current XDR enum already defines the arm and the export command does not filter it out, so any network that emits this config setting will produce plausibly shaped but payload-free rows.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-11
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of `ai-summary/success/data-integrity/006-eviction-iterator-empty-shell.md.gh-published`
+**Failed At**: reviewer
+
+### Trace Summary
+
+This hypothesis describes the exact same bug as the already-published finding `data-integrity/006-eviction-iterator-empty-shell`. Both identify that `TransformConfigSetting()` never calls `GetEvictionIterator()`, that `ConfigSettingOutput` has no fields for `bucket_list_level`, `is_curr_bucket`, or `bucket_file_offset`, and that config_setting_id=13 rows are emitted as empty shells with only metadata. The published finding already includes a complete PoC test and suggested fix.
+
+### Code Paths Examined
+
+- `internal/transform/config_setting.go:24-107` — confirmed no call to `GetEvictionIterator()`
+- `internal/transform/schema.go:563-627` — confirmed no eviction-iterator fields in `ConfigSettingOutput`
+- `ai-summary/success/data-integrity/006-eviction-iterator-empty-shell.md.gh-published` — identical root cause, mechanism, affected code, and impact
+
+### Why It Failed
+
+This is a duplicate of an already-confirmed and published finding. The published success file `data-integrity/006-eviction-iterator-empty-shell` covers the identical root cause (missing `GetEvictionIterator()` call), the identical affected schema (no destination columns for iterator fields), and the identical impact (empty shell rows for config_setting_id=13). No new information is contributed by this hypothesis.
+
+### Lesson Learned
+
+Cross-check `ai-summary/success/` across all subsystems (not just the target subsystem) before submitting, as the same underlying bug may have been discovered and published under a different subsystem classification (here `data-integrity` vs `data-transform`).
