@@ -100,3 +100,102 @@ The bug is confirmed through direct code reading:
 - **Setup**: Construct a `ManageSellOfferOp` with `Selling = native` and `Buying = CreditAlphanum4{AssetCode: "TEST", Issuer: <some account>}`. Wrap it in an `xdr.Operation` with `Body.Type = OperationTypeManageSellOffer`.
 - **Steps**: Call `TransformAsset(op, 0, 0, 100, lcm)` and inspect the returned `AssetOutput`.
 - **Assertion**: Assert that the returned `AssetOutput.AssetCode` equals `"TEST"` (the buying asset). The current code will return the native asset instead, confirming the bug. Alternatively, demonstrate that calling `TransformAsset` once per operation can never yield both assets — showing the structural gap.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestManageSellOfferBuyingAssetNeverExported"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `ManageSellOffer` operation selling native XLM and buying a "TEST" credit asset, then calls `TransformAsset`. The function returns only the native (selling-side) asset with `AssetCode=""`, proving the buying-side "TEST" asset is silently dropped. This confirms that any asset whose only reference in a ledger range is on the buy side of a `ManageSellOffer` will be absent from the `history_assets` export.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestManageSellOfferBuyingAssetNeverExported demonstrates that TransformAsset
+// only extracts the Selling side of a ManageSellOffer, silently dropping the
+// Buying asset. If a novel asset's only reference in a ledger range is on the
+// buy side of a ManageSellOffer, it will be absent from the export.
+func TestManageSellOfferBuyingAssetNeverExported(t *testing.T) {
+	// Construct a ManageSellOffer: selling native XLM, buying a custom asset "TEST"
+	testIssuerAddress := "GBVVRXLMNCJQW3IDDXC3X6XCH35B5Q7QXNMMFPENSOGUPQO7WO7HGZPA"
+	testIssuerID, err := xdr.AddressToAccountId(testIssuerAddress)
+	if err != nil {
+		t.Fatalf("failed to parse test issuer address: %v", err)
+	}
+
+	buyingAsset := xdr.Asset{
+		Type: xdr.AssetTypeAssetTypeCreditAlphanum4,
+		AlphaNum4: &xdr.AlphaNum4{
+			AssetCode: xdr.AssetCode4([4]byte{0x54, 0x45, 0x53, 0x54}), // "TEST"
+			Issuer:    testIssuerID,
+		},
+	}
+
+	sellingAsset := xdr.MustNewNativeAsset()
+
+	op := xdr.Operation{
+		Body: xdr.OperationBody{
+			Type: xdr.OperationTypeManageSellOffer,
+			ManageSellOfferOp: &xdr.ManageSellOfferOp{
+				Selling: sellingAsset,
+				Buying:  buyingAsset,
+				Amount:  1000000,
+				Price:   xdr.Price{N: 1, D: 1},
+			},
+		},
+	}
+
+	result, err := TransformAsset(op, 0, 0, 2, genericLedgerCloseMeta)
+	if err != nil {
+		t.Fatalf("TransformAsset returned unexpected error: %v", err)
+	}
+
+	// The buying asset is "TEST" — a novel asset introduced by this operation.
+	// The current code extracts only opSellOf.Selling (native), so the buying
+	// asset is silently lost.
+	if result.AssetCode == "TEST" {
+		t.Log("TransformAsset correctly returned the buying asset — bug is fixed")
+	} else {
+		// Bug confirmed: the output contains only the selling-side asset (native),
+		// and the buying-side asset "TEST" is never exported.
+		t.Errorf("BUG CONFIRMED: ManageSellOffer buying asset lost — got AssetType=%q AssetCode=%q, "+
+			"but the operation's Buying asset is TEST issued by %s. "+
+			"The buying asset is silently dropped from the export.",
+			result.AssetType, result.AssetCode, testIssuerAddress)
+	}
+
+	// Additionally demonstrate the structural limitation: TransformAsset returns
+	// a single AssetOutput, so it can never yield both assets from one operation.
+	// Even if the caller iterates, each ManageSellOffer operation produces at most
+	// one asset row — always the selling side.
+	if result.AssetType != "native" {
+		t.Errorf("Expected selling-side native asset, got type=%q code=%q", result.AssetType, result.AssetCode)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestManageSellOfferBuyingAssetNeverExported
+    data_integrity_poc_test.go:56: BUG CONFIRMED: ManageSellOffer buying asset lost — got AssetType="native" AssetCode="", but the operation's Buying asset is TEST issued by GBVVRXLMNCJQW3IDDXC3X6XCH35B5Q7QXNMMFPENSOGUPQO7WO7HGZPA. The buying asset is silently dropped from the export.
+--- FAIL: TestManageSellOfferBuyingAssetNeverExported (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.816s
+```
