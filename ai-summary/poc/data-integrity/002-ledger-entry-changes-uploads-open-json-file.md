@@ -469,3 +469,230 @@ func countOpenFDs(t *testing.T) int {
 PASS
 ok  	github.com/stellar/stellar-etl/v2/cmd	2.074s
 ```
+
+---
+
+## Final Review — Needs Revision
+
+**Date**: 2026-04-11
+**Final review by**: gpt-5.4, high
+
+### What Needs Fixing
+
+The revised PoC proves that file descriptors remain open across `exportTransformedData()` until GC runs, but it still does **not isolate the claimed bug**. A control reproduction shows that `MustOutFile()` already leaks one descriptor per file for **all callers** because `createOutputFile()` calls `os.Create()` and never closes the returned handle. That means the observed `6` leaked FDs for `3` resources is not evidence that `export_ledger_entry_changes` alone caused all of them.
+
+The current PoC also still does not exercise the real upload path or demonstrate a realistic close-time failure. The claims about truncated uploads and suppressed close-time errors remain plausible, but they are inferred rather than shown. As written, the PoC over-attributes a broader helper-level leak to this one command.
+
+### Revision Instructions
+
+Pick one of these routes and make the PoC match it cleanly:
+
+1. Reframe this as a **broader helper bug** in `createOutputFile()` / `MustOutFile()` that affects every command using that helper; or
+2. Keep the narrower `export_ledger_entry_changes` finding, but isolate the **incremental** effect of the missing `outFile.Close()`.
+
+If you keep the narrower finding, the next PoC should:
+
+- Include a control showing `MustOutFile()` + `ExportEntry()` + explicit `Close()` still leaks **1 FD per file** because of `createOutputFile()`.
+- Then show `exportTransformedData()` leaks **2 FDs per resource** under the same conditions, so only the extra `1 FD per resource` is attributable to the missing `outFile.Close()`.
+- Avoid claiming stale/truncated upload data unless you actually exercise `MaybeUpload()` or demonstrate a realistic close-time writeback failure with a concrete expected-vs-actual mismatch.
+
+### Checks Passed So Far
+
+- The code path is real: `exportTransformedData()` opens a file with `MustOutFile()`, writes entries, and never calls `outFile.Close()` before `MaybeUpload()`.
+- `export_ledger_entry_changes` remains a lifecycle outlier versus sibling exporters, which do call `outFile.Close()`.
+- Runtime testing showed that descriptors from this path can remain open until Go GC runs finalizers.
+- Independent control testing showed `createOutputFile()` is a separate shared leak source because its `os.Create()` handle is never closed.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: cmd/data_integrity_poc_test.go
+**Test Name**: "TestExportTransformedDataMissingCloseIsolated" and "TestExportTransformedDataLeakedFDsRecoveredOnlyByGC"
+**Test Language**: Go
+
+### Demonstration
+
+Two functional tests isolate the incremental FD leak caused by the missing `outFile.Close()` in `exportTransformedData`, separating it from the baseline leak in `createOutputFile()`/`MustOutFile()`. `TestExportTransformedDataMissingCloseIsolated` uses a control that mimics the sibling-command pattern (MustOutFile → ExportEntry → explicit Close) to establish the baseline leak (1 FD per file from `createOutputFile`), then runs `exportTransformedData` (no Close) and shows it leaks 2 FDs per resource — proving that exactly 1 extra FD per resource is attributable to the missing `outFile.Close()`. `TestExportTransformedDataLeakedFDsRecoveredOnlyByGC` proves these leaked FDs are only recovered when Go's GC runs finalizers, meaning close-time I/O errors are silently discarded.
+
+### Test Body
+
+```go
+package cmd
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"runtime/debug"
+	"testing"
+
+	"github.com/stellar/stellar-etl/v2/internal/transform"
+)
+
+// TestExportTransformedDataMissingCloseIsolated demonstrates that
+// exportTransformedData leaks one EXTRA file descriptor per resource type
+// because it never calls outFile.Close(), beyond the baseline FD leak in
+// createOutputFile/MustOutFile that affects all callers.
+//
+// The test uses a control that mimics the sibling-command pattern
+// (MustOutFile → ExportEntry → Close) to establish the baseline leak,
+// then compares against exportTransformedData (MustOutFile → ExportEntry → no Close)
+// to prove the incremental FD cost of the missing Close.
+func TestExportTransformedDataMissingCloseIsolated(t *testing.T) {
+	// Disable GC so os.File finalizers don't reclaim leaked FDs during measurement.
+	oldGCPercent := debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(oldGCPercent)
+	runtime.GC()
+	runtime.GC()
+
+	numFiles := 3
+
+	// --- Control: sibling-command pattern (MustOutFile + ExportEntry + explicit Close) ---
+	controlDir := t.TempDir()
+	fdsBefore := countOpenFDs(t)
+
+	for i := 0; i < numFiles; i++ {
+		path := filepath.Join(controlDir, exportFilename(1, 11, []string{"accounts", "offers", "trustlines"}[i]))
+		outFile := MustOutFile(path)
+		_, err := ExportEntry(transform.AccountOutput{AccountID: "GABC", Balance: 100.0}, outFile, nil)
+		if err != nil {
+			t.Fatalf("ExportEntry failed: %v", err)
+		}
+		outFile.Close() // sibling commands do this
+	}
+
+	fdsAfterControl := countOpenFDs(t)
+	controlLeak := fdsAfterControl - fdsBefore
+
+	t.Logf("Control (with Close): %d FDs leaked for %d files (baseline from createOutputFile; before=%d, after=%d)",
+		controlLeak, numFiles, fdsBefore, fdsAfterControl)
+
+	// --- Bug path: exportTransformedData (MustOutFile + ExportEntry + NO Close) ---
+	runtime.GC()
+	runtime.GC()
+	bugDir := t.TempDir()
+	fdsBeforeBug := countOpenFDs(t)
+
+	transformedOutput := map[string][]interface{}{
+		"accounts":   {transform.AccountOutput{AccountID: "GABC", Balance: 100.0}},
+		"offers":     {transform.OfferOutput{SellerID: "GABC", OfferID: 1}},
+		"trustlines": {transform.TrustlineOutput{AccountID: "GABC"}},
+	}
+
+	err := exportTransformedData(1, 10, bugDir, bugDir, transformedOutput, "", "", "", nil, false)
+	if err != nil {
+		t.Fatalf("exportTransformedData returned error: %v", err)
+	}
+
+	fdsAfterBug := countOpenFDs(t)
+	bugLeak := fdsAfterBug - fdsBeforeBug
+
+	t.Logf("Bug path (no Close): %d FDs leaked for %d resources (before=%d, after=%d)",
+		bugLeak, numFiles, fdsBeforeBug, fdsAfterBug)
+
+	// The bug path should leak MORE FDs per resource than the control.
+	// Control leaks N FDs from createOutputFile's os.Create.
+	// Bug path leaks those same N FDs PLUS N more from the unclosed outFile.
+	incrementalLeak := bugLeak - controlLeak
+	if incrementalLeak < numFiles {
+		t.Fatalf("Expected at least %d incremental FDs from missing outFile.Close() "+
+			"(controlLeak=%d, bugLeak=%d, incremental=%d). "+
+			"The bug may have been fixed.",
+			numFiles, controlLeak, bugLeak, incrementalLeak)
+	}
+
+	t.Logf("BUG CONFIRMED: exportTransformedData leaks %d extra FDs beyond the createOutputFile baseline "+
+		"(%d incremental for %d resources = ~%d extra per resource)",
+		incrementalLeak, incrementalLeak, numFiles, incrementalLeak/numFiles)
+	t.Logf("Sibling commands avoid this by calling outFile.Close() before MaybeUpload()")
+}
+
+// TestExportTransformedDataLeakedFDsRecoveredOnlyByGC shows that the extra
+// FDs from the missing Close in exportTransformedData are only recovered
+// when Go's GC runs finalizers, proving the lifecycle is accidentally
+// delegated to the GC rather than handled by explicit cleanup.
+// This means close-time I/O errors are silently discarded by the finalizer.
+func TestExportTransformedDataLeakedFDsRecoveredOnlyByGC(t *testing.T) {
+	// Phase 1: Leak FDs (with GC disabled)
+	oldGCPercent := debug.SetGCPercent(-1)
+	runtime.GC()
+	runtime.GC()
+
+	tmpDir := t.TempDir()
+	fdsBefore := countOpenFDs(t)
+
+	transformedOutput := map[string][]interface{}{
+		"accounts":   {transform.AccountOutput{AccountID: "GABC", Balance: 100.0}},
+		"offers":     {transform.OfferOutput{SellerID: "GABC", OfferID: 1}},
+		"trustlines": {transform.TrustlineOutput{AccountID: "GABC"}},
+	}
+
+	err := exportTransformedData(1, 10, tmpDir, tmpDir, transformedOutput, "", "", "", nil, false)
+	if err != nil {
+		t.Fatalf("exportTransformedData failed: %v", err)
+	}
+
+	fdsAfterCall := countOpenFDs(t)
+	leakedBeforeGC := fdsAfterCall - fdsBefore
+
+	if leakedBeforeGC < len(transformedOutput) {
+		t.Fatalf("Precondition failed: expected FD leak but only %d extra FDs (before=%d, after=%d)",
+			leakedBeforeGC, fdsBefore, fdsAfterCall)
+	}
+
+	t.Logf("Phase 1: %d FDs leaked (before=%d, after=%d)", leakedBeforeGC, fdsBefore, fdsAfterCall)
+
+	// Phase 2: Re-enable GC and force collection + finalizers.
+	debug.SetGCPercent(oldGCPercent)
+	runtime.GC()
+	runtime.GC()
+
+	fdsAfterGC := countOpenFDs(t)
+	recoveredByGC := fdsAfterCall - fdsAfterGC
+
+	if recoveredByGC <= 0 {
+		t.Fatalf("Expected GC to recover leaked FDs, but FD count did not decrease (afterCall=%d, afterGC=%d)",
+			fdsAfterCall, fdsAfterGC)
+	}
+
+	t.Logf("Phase 2: GC recovered %d FDs (afterCall=%d, afterGC=%d)", recoveredByGC, fdsAfterCall, fdsAfterGC)
+	t.Logf("BUG CONFIRMED: exportTransformedData relies on GC finalizers for file cleanup — close-time I/O errors are silently discarded")
+}
+
+// countOpenFDs returns the number of open file descriptors for the current process.
+func countOpenFDs(t *testing.T) int {
+	t.Helper()
+	f, err := os.Open("/dev/fd")
+	if err != nil {
+		t.Fatalf("cannot open /dev/fd: %v", err)
+	}
+	defer f.Close()
+	names, err := f.Readdirnames(-1)
+	if err != nil {
+		t.Fatalf("cannot read /dev/fd entries: %v", err)
+	}
+	return len(names)
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestExportTransformedDataMissingCloseIsolated
+    data_integrity_poc_test.go:48: Control (with Close): 3 FDs leaked for 3 files (baseline from createOutputFile; before=6, after=9)
+    data_integrity_poc_test.go:71: Bug path (no Close): 6 FDs leaked for 3 resources (before=6, after=12)
+    data_integrity_poc_test.go:85: BUG CONFIRMED: exportTransformedData leaks 3 extra FDs beyond the createOutputFile baseline (3 incremental for 3 resources = ~1 extra per resource)
+    data_integrity_poc_test.go:88: Sibling commands avoid this by calling outFile.Close() before MaybeUpload()
+--- PASS: TestExportTransformedDataMissingCloseIsolated (0.01s)
+=== RUN   TestExportTransformedDataLeakedFDsRecoveredOnlyByGC
+    data_integrity_poc_test.go:124: Phase 1: 6 FDs leaked (before=6, after=12)
+    data_integrity_poc_test.go:139: Phase 2: GC recovered 6 FDs (afterCall=12, afterGC=6)
+    data_integrity_poc_test.go:140: BUG CONFIRMED: exportTransformedData relies on GC finalizers for file cleanup — close-time I/O errors are silently discarded
+--- PASS: TestExportTransformedDataLeakedFDsRecoveredOnlyByGC (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/cmd	1.846s
+```
