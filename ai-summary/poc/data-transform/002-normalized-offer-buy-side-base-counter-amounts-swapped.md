@@ -86,3 +86,133 @@ The bug is confirmed: for every buy-side offer (`action = "b"`), the `BaseAmount
 - **Setup**: Use the existing `makeOfferNormalizedTestInput()` fixture (selling native, buying ETH) which produces `action = "b"`
 - **Steps**: Call `TransformOfferNormalized(hardCodedInput, 100)` and inspect the `Offer` field
 - **Assertion**: Assert that `result.Offer.BaseAmount` equals the ETH (base asset) quantity (`≈135.1647`) and `result.Offer.CounterAmount` equals the native (counter asset) quantity (`262.8450327`). The current test asserts the opposite, confirming the bug. The PoC should demonstrate the discrepancy by showing `result.Market.BaseCode == "ETH"` but `result.Offer.BaseAmount == 262.8450327` (which is the native/counter quantity, not the ETH/base quantity).
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestBuySideNormalizedOfferBaseCounterAmountsSwapped"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a buy-side offer (selling native, buying ETH) and calls `TransformOfferNormalized`. It verifies that the market correctly identifies ETH as the base asset and native as the counter asset, and that `action = "b"`. It then proves that `BaseAmount` contains the native (counter) quantity (262.8450327) instead of the ETH (base) quantity (135.1647), and `CounterAmount` contains the ETH (base) quantity instead of the native (counter) quantity — confirming that buy-side normalized offers have their base and counter amounts swapped.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/ingest"
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestBuySideNormalizedOfferBaseCounterAmountsSwapped demonstrates that for buy-side
+// normalized offers (action="b"), BaseAmount and CounterAmount are swapped relative
+// to the canonical market definition.
+func TestBuySideNormalizedOfferBaseCounterAmountsSwapped(t *testing.T) {
+	// Setup: Use the same fixture as the existing test.
+	// Offer sells native, buys ETH. Market sorts to ETH(base)/native(counter).
+	// Since the seller is selling the counter asset (native), action = "b".
+	input := ingest.Change{
+		ChangeType: xdr.LedgerEntryChangeTypeLedgerEntryCreated,
+		Type:       xdr.LedgerEntryTypeOffer,
+		Pre:        nil,
+		Post: &xdr.LedgerEntry{
+			LastModifiedLedgerSeq: xdr.Uint32(30715263),
+			Data: xdr.LedgerEntryData{
+				Type: xdr.LedgerEntryTypeOffer,
+				Offer: &xdr.OfferEntry{
+					SellerId: testAccount1ID,
+					OfferId:  260678439,
+					Selling:  nativeAsset,
+					Buying:   ethAsset,
+					Amount:   2628450327, // 262.8450327 native (the selling/counter asset)
+					Price: xdr.Price{
+						N: 920936891,
+						D: 1790879058,
+					},
+					Flags: 2,
+				},
+			},
+		},
+	}
+
+	result, err := TransformOfferNormalized(input, 100)
+	if err != nil {
+		t.Fatalf("TransformOfferNormalized failed: %v", err)
+	}
+
+	// Verify market canonical ordering: ETH is base, native is counter
+	if result.Market.BaseCode != "ETH" {
+		t.Fatalf("Expected market base code ETH, got %s", result.Market.BaseCode)
+	}
+	if result.Market.CounterCode != "native" {
+		t.Fatalf("Expected market counter code native, got %s", result.Market.CounterCode)
+	}
+
+	// Verify action is buy-side
+	if result.Offer.Action != "b" {
+		t.Fatalf("Expected action 'b', got %s", result.Offer.Action)
+	}
+
+	// The offer sells 262.8450327 native and buys ETH at price 920936891/1790879058.
+	// offer.Amount = 262.8450327 (native quantity, the selling asset)
+	// offer.Amount * price = 135.16473161502083 (ETH quantity, the buying asset)
+	//
+	// Since ETH is the base asset and native is the counter asset:
+	//   Correct BaseAmount  = ETH quantity  = 135.16473161502083
+	//   Correct CounterAmount = native quantity = 262.8450327
+	//
+	// BUG: The code unconditionally assigns BaseAmount = offer.Amount (selling quantity)
+	// and CounterAmount = offer.Amount * price (buying quantity), which is only correct
+	// for sell-side offers. For buy-side offers, these are swapped.
+
+	nativeQuantity := 262.8450327        // the selling (counter) asset amount
+	ethQuantity := 135.16473161502083    // the buying (base) asset amount
+
+	// Demonstrate the bug: BaseAmount contains the native (counter) quantity
+	// instead of the ETH (base) quantity
+	if result.Offer.BaseAmount == ethQuantity {
+		t.Error("BaseAmount correctly holds ETH quantity — bug is not present (unexpected)")
+	}
+	if result.Offer.BaseAmount != nativeQuantity {
+		t.Errorf("BaseAmount unexpected value: got %v, want %v (native quantity proving the swap)",
+			result.Offer.BaseAmount, nativeQuantity)
+	} else {
+		t.Logf("BUG CONFIRMED: BaseAmount = %v (native/counter quantity), but base asset is ETH",
+			result.Offer.BaseAmount)
+	}
+
+	// Demonstrate the bug: CounterAmount contains the ETH (base) quantity
+	// instead of the native (counter) quantity
+	if result.Offer.CounterAmount == nativeQuantity {
+		t.Error("CounterAmount correctly holds native quantity — bug is not present (unexpected)")
+	}
+	if result.Offer.CounterAmount != ethQuantity {
+		t.Errorf("CounterAmount unexpected value: got %v, want %v (ETH quantity proving the swap)",
+			result.Offer.CounterAmount, ethQuantity)
+	} else {
+		t.Logf("BUG CONFIRMED: CounterAmount = %v (ETH/base quantity), but counter asset is native",
+			result.Offer.CounterAmount)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestBuySideNormalizedOfferBaseCounterAmountsSwapped
+    data_integrity_poc_test.go:83: BUG CONFIRMED: BaseAmount = 262.8450327 (native/counter quantity), but base asset is ETH
+    data_integrity_poc_test.go:96: BUG CONFIRMED: CounterAmount = 135.16473161502083 (ETH/base quantity), but counter asset is native
+--- PASS: TestBuySideNormalizedOfferBaseCounterAmountsSwapped (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.723s
+```
