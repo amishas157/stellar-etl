@@ -67,3 +67,77 @@ The underlying `extractBatch()` function uses `<=` in its inner loop and would c
 - **Setup**: Add a new test case to `TestStreamChangesBatchNumbers` with `batchStart: 5, batchEnd: 5` (single ledger). Use the existing `mockExtractBatch` stub and `batchSize = 64`.
 - **Steps**: Call `StreamChanges(nil, 5, 5, 64, changeChan, closeChan, env, logger)` and collect batches from `changeChan`.
 - **Assertion**: Assert that exactly one batch is received with `BatchStart: 5, BatchEnd: 5`. Currently, zero batches will be received, demonstrating the bug.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/input/data_integrity_poc_test.go
+**Test Name**: "TestSingleLedgerStreamChangesProducesNoBatch"
+**Test Language**: Go
+
+### Demonstration
+
+The test calls `StreamChanges(nil, 5, 5, 64, changeChan, closeChan, env, logger)` with a single-ledger range (start=5, end=5) and collects batches from the channel. Zero batches are received, confirming that `StreamChanges` silently skips the entire range. The bug is in the loop condition `batchStart < batchEnd` which evaluates to `5 < 5 = false`, preventing any batch from being emitted for a valid single-ledger request.
+
+### Test Body
+
+```go
+package input
+
+import (
+	"testing"
+
+	"github.com/stellar/stellar-etl/v2/internal/utils"
+)
+
+// TestSingleLedgerStreamChangesProducesNoBatch demonstrates that StreamChanges
+// silently produces zero batches when start == end (single-ledger range).
+func TestSingleLedgerStreamChangesProducesNoBatch(t *testing.T) {
+	batchSize := uint32(64)
+	changeChan := make(chan ChangeBatch, 10)
+	closeChan := make(chan int)
+	env := utils.EnvironmentDetails{
+		NetworkPassphrase: "",
+		ArchiveURLs:       nil,
+		BinaryPath:        "",
+		CoreConfig:        "",
+	}
+	logger := utils.NewEtlLogger()
+	ExtractBatch = mockExtractBatch
+
+	// Request a single-ledger range: start == end == 5
+	go StreamChanges(nil, 5, 5, batchSize, changeChan, closeChan, env, logger)
+
+	var batches []ChangeBatch
+	for b := range changeChan {
+		batches = append(batches, b)
+	}
+
+	// A single-ledger range should produce exactly one batch covering ledger 5.
+	// The bug: StreamChanges computes batchEnd = min(5+64, 5) = 5, then the
+	// loop condition "batchStart < batchEnd" (5 < 5) is false, so zero batches
+	// are emitted.
+	if len(batches) == 0 {
+		t.Errorf("BUG CONFIRMED: StreamChanges produced 0 batches for single-ledger range (start=5, end=5); expected 1 batch")
+	} else if len(batches) != 1 || batches[0].BatchStart != 5 || batches[0].BatchEnd != 5 {
+		t.Errorf("Unexpected batch result: got %d batches, first batch start=%d end=%d; expected 1 batch with start=5 end=5",
+			len(batches), batches[0].BatchStart, batches[0].BatchEnd)
+	} else {
+		t.Logf("Single-ledger range correctly produced 1 batch: start=%d end=%d", batches[0].BatchStart, batches[0].BatchEnd)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestSingleLedgerStreamChangesProducesNoBatch
+    data_integrity_poc_test.go:37: BUG CONFIRMED: StreamChanges produced 0 batches for single-ledger range (start=5, end=5); expected 1 batch
+--- FAIL: TestSingleLedgerStreamChangesProducesNoBatch (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/input	0.668s
+```

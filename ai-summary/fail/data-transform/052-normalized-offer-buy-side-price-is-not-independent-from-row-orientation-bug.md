@@ -242,3 +242,34 @@ func TestBuySideNormalizedOfferPriceNotInverted(t *testing.T) {
 PASS
 ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.830s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-11
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Exercises claimed bug**: NO — the PoC shows that `extractDimOffer()` copies raw `offer.Price`, but it does not prove that `DimOffer.Price` is wrong on the row the exporter actually emits today. Its "expected" value is derived from the already-corrected buy-side amounts from finding 021, not from a broken invariant in the current output.
+2. **Realistic preconditions**: YES — the checked-in fixture does reach the live `action = "b"` path.
+3. **Bug vs by-design**: NOT SHOWN — the repository does not document an independent contract that `dim_offers.price` must be inverted separately from the row's present base/counter orientation.
+4. **Impact/severity**: N/A — rejected.
+5. **In scope**: YES — if real, this would be in scope.
+6. **Test correctness**: INCORRECT — the test passes by asserting that current output differs from a hypothesized canonical reciprocal and then confirming the output equals the raw offer-side price. That is a tautological check of current behavior, not a proof that a production invariant fails.
+7. **Alternative explanations**: YES — the observation is fully explained by the already-confirmed buy-side row-orientation bug. On the emitted row, `price == counter_amount / base_amount` exactly: `135.16473161502083 / 262.8450327 = 0.5142373444404865`. So `price` is internally consistent with the emitted `DimOffer` amounts; the mismatch only appears when those amounts are hypothetically corrected to the canonical orientation from finding 021.
+8. **Novelty**: NO — this is not an independent residual defect. It is the same branchless buy-side normalization bug already captured by `data-transform/021-normalized-offer-buy-side-base-counter-amounts-swapped.md`, just described through another field from the same row.
+
+### Rejection Reason
+
+The PoC does not establish a distinct `price` corruption bug. `DimOffer.Price` is internally consistent with the current emitted `BaseAmount` and `CounterAmount`; it only looks inverted against `DimMarket` because the entire buy-side row is already reversed by finding 021. The test therefore passes for the wrong reason and does not demonstrate an independent finding.
+
+### Failed Checks
+
+- 1
+- 6
+- 7
+- 8
