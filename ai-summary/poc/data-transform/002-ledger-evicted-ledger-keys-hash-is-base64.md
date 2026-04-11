@@ -58,7 +58,6 @@ The checked-in ledger fixture already expects the base64 payload, so the current
 - `internal/transform/contract_data.go:68` — uses `utils.LedgerEntryToLedgerKeyHash()` for its `LedgerKeyHash` field (actual hash).
 - `internal/transform/contract_code.go:31` — uses `utils.LedgerEntryToLedgerKeyHash()` for its `LedgerKeyHash` field (actual hash).
 - `internal/transform/operation.go:1859-1873` — uses `utils.LedgerKeyToLedgerKeyHash()` for operation `ledger_key_hash` details (actual hash).
-- `internal/transform/contract_data.go:155` — contract_data also has a separate `LedgerKeyHashBase64` field for base64-encoded XDR, correctly distinguished from the hex hash.
 
 ### Findings
 
@@ -79,3 +78,71 @@ This means:
 - **Setup**: Create a test `xdr.LedgerKey` (e.g., a ContractData key). Compute its expected hash using `utils.LedgerKeyToLedgerKeyHash()`. Then build a `[]xdr.LedgerKey` slice containing it.
 - **Steps**: Call `transformLedgerKeys()` with the slice. Also call `utils.LedgerKeyToLedgerKeyHash()` on the same key.
 - **Assertion**: Assert that `transformLedgerKeys()` returns the same hex hash string as `utils.LedgerKeyToLedgerKeyHash()`. Currently this will fail — `transformLedgerKeys` returns base64 XDR while the utility returns a hex SHA256 hash. This demonstrates the inconsistency.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestEvictedLedgerKeysHashIsBase64NotHash"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a ContractData `xdr.LedgerKey`, passes it through both `transformLedgerKeys()` (the production code path for `evicted_ledger_keys_hash`) and `utils.LedgerKeyToLedgerKeyHash()` (the canonical hashing helper). The production code returns base64-encoded XDR (`"AAAABgAAAAEBAgMEBQYHCAkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABQAAAAB"`) while the canonical helper returns a hex SHA256 hash (`"58c0cdbbb3b20dbf49d438b84e8f7dcf0c8a614b87a041e3013fc6ece1adf52b"`), proving the `_hash` field contains serialized XDR instead of an actual hash.
+
+### Test Body
+
+```go
+func TestEvictedLedgerKeysHashIsBase64NotHash(t *testing.T) {
+	// 1. Construct a sample LedgerKey (ContractData key)
+	contractID := xdr.ContractId{1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	key := xdr.LedgerKey{
+		Type: xdr.LedgerEntryTypeContractData,
+		ContractData: &xdr.LedgerKeyContractData{
+			Contract: xdr.ScAddress{
+				Type:       xdr.ScAddressTypeScAddressTypeContract,
+				ContractId: &contractID,
+			},
+			Key:        xdr.ScVal{Type: xdr.ScValTypeScvLedgerKeyContractInstance},
+			Durability: xdr.ContractDataDurabilityPersistent,
+		},
+	}
+
+	// 2. Compute the expected hex SHA256 hash using the canonical helper
+	expectedHash := utils.LedgerKeyToLedgerKeyHash(key)
+
+	// 3. Run the production code path
+	hashes, _, err := transformLedgerKeys([]xdr.LedgerKey{key})
+	if err != nil {
+		t.Fatalf("transformLedgerKeys failed: %v", err)
+	}
+
+	// 4. Assert: the value from transformLedgerKeys should match the canonical hash.
+	//    If it doesn't, the bug is proven — the field contains base64 XDR, not a hash.
+	if hashes[0] != expectedHash {
+		t.Errorf("evicted_ledger_keys_hash is NOT a hash — it's base64 XDR.\n"+
+			"  transformLedgerKeys returned: %q (base64 XDR, len=%d)\n"+
+			"  LedgerKeyToLedgerKeyHash returned: %q (hex SHA256, len=%d)\n"+
+			"  These should be equal but are not.",
+			hashes[0], len(hashes[0]),
+			expectedHash, len(expectedHash))
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestEvictedLedgerKeysHashIsBase64NotHash
+    data_integrity_poc_test.go:153: evicted_ledger_keys_hash is NOT a hash — it's base64 XDR.
+          transformLedgerKeys returned: "AAAABgAAAAEBAgMEBQYHCAkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABQAAAAB" (base64 XDR, len=64)
+          LedgerKeyToLedgerKeyHash returned: "58c0cdbbb3b20dbf49d438b84e8f7dcf0c8a614b87a041e3013fc6ece1adf52b" (hex SHA256, len=64)
+          These should be equal but are not.
+--- FAIL: TestEvictedLedgerKeysHashIsBase64NotHash (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.813s
+```

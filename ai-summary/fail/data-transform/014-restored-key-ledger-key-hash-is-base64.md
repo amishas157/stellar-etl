@@ -179,3 +179,31 @@ func TestRestoredKeyLedgerKeyHashIsBase64NotHexHash(t *testing.T) {
 PASS
 ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.721s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-11
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Exercises claimed bug**: YES — the PoC correctly shows that `TransformRestoredKey()` emits base64-encoded ledger-key XDR while `utils.LedgerKeyToLedgerKeyHash()` produces a hex SHA-256 digest for the same key.
+2. **Realistic preconditions**: YES — the existing restored-key fixture and `testdata/changes/restored_key.golden` confirm that real `LedgerEntryRestored` exports take this path.
+3. **Bug vs by-design**: NOT PROVEN BUG — the checked-in unit test (`internal/transform/restored_key_test.go`) and end-to-end golden output (`testdata/changes/restored_key.golden`) both intentionally assert the base64 form for `restored_key.ledger_key_hash`. I found no repository documentation, schema contract, or sibling code that requires the restored-key table specifically to use the hex digest representation.
+4. **Impact vs severity**: NOT HIGH — the claimed downstream join breakage is speculative. The PoC proves only a representation mismatch, not that any consumer receives incorrect restored-key data. At most this supports an informational consistency/naming concern.
+5. **In scope**: NO — without proof that the export is semantically wrong rather than intentionally serialized differently, this reduces to a naming/convention complaint, which is out of scope for data-integrity findings.
+6. **Test correctness**: PARTIAL — the test is technically sound for proving inequality with the hash helper, but it assumes without evidence that `restored_key.ledger_key_hash` is supposed to equal that helper's output.
+7. **Alternative explanations**: PRESENT — `restored_key` may intentionally store the full serialized ledger key because this table has no separate raw-key/base64 column and spans entry types that do not all have sibling tables using the hex-hash convention.
+8. **Novelty**: UNRESOLVED — novelty is not relevant to the rejection.
+
+### Rejection Reason
+
+The PoC demonstrates an inconsistency in representation, but it does not establish that the restored-key export is wrong. The repository's own checked-in regression tests and golden output intentionally lock in base64 for this table, and there is no codebase contract showing that `restored_key.ledger_key_hash` must use the hex SHA-256 convention used elsewhere. Without that missing contract, the finding is an unproven naming/consistency issue rather than confirmed data corruption.
+
+### Failed Checks
+
+3, 4, 5, 6, 7
