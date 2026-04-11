@@ -72,3 +72,190 @@ Severity is **High** (structural data corruption — missing data element) rathe
 - **Setup**: Create a mock `ingest.LedgerTransaction` with `UnsafeMeta` set to a V4 `TransactionMeta` (empty `TxChangesAfter`) and a non-empty `PostTxApplyFeeChanges` containing a balance change entry. Also create a valid `xdr.LedgerHeaderHistoryEntry` with `LedgerVersion >= 23`.
 - **Steps**: Call `TransformLedgerTransaction(transaction, lhe)` and decode the returned `TxFeeMeta` from base64 back to `xdr.LedgerEntryChanges`.
 - **Assertion**: Assert that the decoded `TxFeeMeta` does NOT contain the PostTxApplyFeeChanges entries (demonstrating the data loss). Then assert that `PostTxApplyFeeChanges` on the input struct is non-empty, proving the data existed but was dropped.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestPostTxApplyFeeChangesDroppedFromLedgerTransaction"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs an `ingest.LedgerTransaction` with V4 meta (P23+) and a non-empty `PostTxApplyFeeChanges` slice containing a fee account balance state→updated pair representing a 10,705 stroop refund. After calling `TransformLedgerTransaction()`, the test decodes `TxMeta` back to `TransactionMeta` and verifies `TxChangesAfter` is empty, then confirms `TxFeeMeta` does not match the serialized post-apply changes. No output field carries the refund data — confirming the silent data loss.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"encoding/base64"
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/ingest"
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestPostTxApplyFeeChangesDroppedFromLedgerTransaction demonstrates that
+// TransformLedgerTransaction silently drops PostTxApplyFeeChanges data for
+// P23+ transactions. The refund balance changes exist on the input but appear
+// in no output field.
+func TestPostTxApplyFeeChangesDroppedFromLedgerTransaction(t *testing.T) {
+	// 1. Construct PostTxApplyFeeChanges representing a P23+ fee refund.
+	//    This is a state→updated pair showing a 10,705 stroop refund credit.
+	postApplyChanges := xdr.LedgerEntryChanges{
+		{
+			Type: xdr.LedgerEntryChangeTypeLedgerEntryState,
+			State: &xdr.LedgerEntry{
+				Data: xdr.LedgerEntryData{
+					Type: xdr.LedgerEntryTypeAccount,
+					Account: &xdr.AccountEntry{
+						AccountId: testAccount5ID,
+						Balance:   4067134520753,
+					},
+				},
+			},
+		},
+		{
+			Type: xdr.LedgerEntryChangeTypeLedgerEntryUpdated,
+			Updated: &xdr.LedgerEntry{
+				Data: xdr.LedgerEntryData{
+					Type: xdr.LedgerEntryTypeAccount,
+					Account: &xdr.AccountEntry{
+						AccountId: testAccount5ID,
+						Balance:   4067134531458, // refund of 10,705 stroops
+					},
+				},
+			},
+		},
+	}
+
+	tx := ingest.LedgerTransaction{
+		Index: 1,
+		// V4 meta (P23+): TxChangesAfter is deliberately empty — refund data
+		// lives exclusively in PostTxApplyFeeChanges per protocol 23 design.
+		UnsafeMeta: xdr.TransactionMeta{
+			V: 4,
+			V4: &xdr.TransactionMetaV4{
+				TxChangesBefore: xdr.LedgerEntryChanges{},
+				Operations:      []xdr.OperationMetaV2{{}},
+				TxChangesAfter:  xdr.LedgerEntryChanges{},
+			},
+		},
+		Envelope: xdr.TransactionEnvelope{
+			Type: xdr.EnvelopeTypeEnvelopeTypeTx,
+			V1: &xdr.TransactionV1Envelope{
+				Tx: xdr.Transaction{
+					SourceAccount: testAccount1,
+					SeqNum:        1,
+					Fee:           100,
+					Operations: []xdr.Operation{
+						{Body: xdr.OperationBody{
+							Type: xdr.OperationTypeCreateAccount,
+							CreateAccountOp: &xdr.CreateAccountOp{
+								Destination:     testAccount5ID,
+								StartingBalance: 1000000000,
+							},
+						}},
+					},
+				},
+			},
+		},
+		Result: xdr.TransactionResultPair{
+			Result: xdr.TransactionResult{
+				FeeCharged: 100,
+				Result: xdr.TransactionResultResult{
+					Code: xdr.TransactionResultCodeTxSuccess,
+					Results: &[]xdr.OperationResult{
+						{
+							Tr: &xdr.OperationResultTr{
+								Type:                xdr.OperationTypeCreateAccount,
+								CreateAccountResult: &xdr.CreateAccountResult{Code: 0},
+							},
+						},
+					},
+				},
+			},
+		},
+		// The critical field: PostTxApplyFeeChanges carries P23+ refund data
+		PostTxApplyFeeChanges: postApplyChanges,
+	}
+
+	lhe := xdr.LedgerHeaderHistoryEntry{
+		Header: xdr.LedgerHeader{
+			LedgerSeq:     50000000,
+			LedgerVersion: 23,
+			ScpValue:      xdr.StellarValue{CloseTime: 1700000000},
+		},
+	}
+
+	// 2. Run the production transform
+	output, err := TransformLedgerTransaction(tx, lhe)
+	if err != nil {
+		t.Fatalf("TransformLedgerTransaction returned error: %v", err)
+	}
+
+	// 3. Verify the input genuinely carries post-apply fee changes
+	if len(tx.PostTxApplyFeeChanges) == 0 {
+		t.Fatal("Test setup error: PostTxApplyFeeChanges is empty on input")
+	}
+
+	// 4. Serialize PostTxApplyFeeChanges for comparison
+	expectedB64, err := xdr.MarshalBase64(postApplyChanges)
+	if err != nil {
+		t.Fatalf("Failed to marshal PostTxApplyFeeChanges: %v", err)
+	}
+
+	// 5. Check TxFeeMeta — does it contain the post-apply changes?
+	if output.TxFeeMeta == expectedB64 {
+		t.Fatal("PostTxApplyFeeChanges found in TxFeeMeta — hypothesis disproven")
+	}
+
+	// 6. Check TxMeta — decode and look for the changes in TxChangesAfter
+	if output.TxMeta != "" {
+		metaBytes, err := base64.StdEncoding.DecodeString(output.TxMeta)
+		if err != nil {
+			t.Fatalf("Failed to decode TxMeta base64: %v", err)
+		}
+		var meta xdr.TransactionMeta
+		if err := meta.UnmarshalBinary(metaBytes); err != nil {
+			t.Fatalf("Failed to unmarshal TxMeta: %v", err)
+		}
+		if v4, ok := meta.GetV4(); ok {
+			if len(v4.TxChangesAfter) > 0 {
+				afterB64, _ := xdr.MarshalBase64(v4.TxChangesAfter)
+				if afterB64 == expectedB64 {
+					t.Fatal("PostTxApplyFeeChanges found in TxMeta.V4.TxChangesAfter — hypothesis disproven")
+				}
+			}
+		}
+	}
+
+	// 7. LedgerTransactionOutput has only: TxEnvelope, TxResult, TxMeta,
+	//    TxFeeMeta, TxLedgerHistory, ClosedAt, LedgerSequence.
+	//    None of the remaining fields can carry arbitrary XDR.
+	//    The post-apply fee changes are confirmed dropped.
+
+	t.Errorf("BUG CONFIRMED: PostTxApplyFeeChanges (P23+ fee refund data) is silently dropped. "+
+		"Input had %d PostTxApplyFeeChanges entries (base64 length %d). "+
+		"TxFeeMeta contains only FeeChanges (pre-apply). "+
+		"TxMeta contains only UnsafeMeta (V4 with empty TxChangesAfter). "+
+		"No output field carries the refund balance changes.",
+		len(postApplyChanges), len(expectedB64))
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestPostTxApplyFeeChangesDroppedFromLedgerTransaction
+    data_integrity_poc_test.go:151: BUG CONFIRMED: PostTxApplyFeeChanges (P23+ fee refund data) is silently dropped. Input had 2 PostTxApplyFeeChanges entries (base64 length 264). TxFeeMeta contains only FeeChanges (pre-apply). TxMeta contains only UnsafeMeta (V4 with empty TxChangesAfter). No output field carries the refund balance changes.
+--- FAIL: TestPostTxApplyFeeChangesDroppedFromLedgerTransaction (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.730s
+```
