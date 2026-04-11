@@ -84,3 +84,98 @@ The bug is clear and the inconsistency is structural:
   2. Also extract the ledger key from the same input and compute the expected hash via `utils.LedgerKeyToLedgerKeyHash(ledgerKey)`
   3. Compare the two values
 - **Assertion**: Assert that `output.LedgerKeyHash` equals the hex SHA-256 hash from `utils.LedgerKeyToLedgerKeyHash()`. The current code will fail this assertion because it returns a base64 string instead. Additionally, verify the base64 value contains characters outside `[0-9a-f]` (like `A`, `+`, `/`, `=`) to confirm it is not a hex hash.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestRestoredKeyLedgerKeyHashIsBase64NotHexHash"
+**Test Language**: Go
+
+### Demonstration
+
+The test calls `TransformRestoredKey()` with the existing test fixture and compares the `LedgerKeyHash` output against the canonical hex SHA-256 hash computed by `utils.LedgerKeyToLedgerKeyHash()`. The output is `"AAAAAgAAAACI4aa0pXFSj6qfJuIObLw/5zyugLRGYwxb7wFSr3B9eAAAAAAPiaMn"` (a base64-encoded XDR key) while the correct hash should be `"8cc323d734b0263b26708e4842c3a3a9cd3db13146e5e7a5862092749e5d3377"` (a 64-char hex SHA-256). The values don't match and the output contains uppercase and special characters confirming it's base64, not a hex hash.
+
+### Test Body
+
+```go
+func TestRestoredKeyLedgerKeyHashIsBase64NotHexHash(t *testing.T) {
+	// Step 1: Use the existing test fixture to construct a restored ledger entry
+	change, err := makeRestoredKeyTestInput()
+	if err != nil {
+		t.Fatalf("failed to create test input: %v", err)
+	}
+
+	header := xdr.LedgerHeaderHistoryEntry{
+		Header: xdr.LedgerHeader{
+			ScpValue: xdr.StellarValue{
+				CloseTime: 1000,
+			},
+			LedgerSeq: 10,
+		},
+	}
+
+	// Step 2: Run the production transform
+	output, err := TransformRestoredKey(change, header)
+	if err != nil {
+		t.Fatalf("TransformRestoredKey failed: %v", err)
+	}
+
+	// Step 3: Compute the expected hex SHA-256 hash via the canonical helper
+	ledgerEntry := change.Post
+	ledgerKey, err := ledgerEntry.LedgerKey()
+	if err != nil {
+		t.Fatalf("failed to extract ledger key: %v", err)
+	}
+	expectedHash := utils.LedgerKeyToLedgerKeyHash(ledgerKey)
+
+	// Step 4: Verify the expected hash is a valid 64-char lowercase hex string
+	if len(expectedHash) != 64 {
+		t.Fatalf("expected hash length 64 (hex SHA-256), got %d: %s", len(expectedHash), expectedHash)
+	}
+	if _, err := hex.DecodeString(expectedHash); err != nil {
+		t.Fatalf("expected hash is not valid hex: %s", expectedHash)
+	}
+
+	// Step 5: Demonstrate the bug — output.LedgerKeyHash is NOT the hex hash
+	t.Logf("output.LedgerKeyHash = %q", output.LedgerKeyHash)
+	t.Logf("expected hex hash    = %q", expectedHash)
+
+	if output.LedgerKeyHash == expectedHash {
+		t.Fatal("Expected LedgerKeyHash to differ from the hex hash (bug not present), but they matched")
+	}
+
+	// Step 6: Confirm the output is base64 (contains chars outside [0-9a-f])
+	hasNonHexChars := false
+	for _, c := range output.LedgerKeyHash {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			hasNonHexChars = true
+			break
+		}
+	}
+	if !hasNonHexChars {
+		t.Fatal("Expected LedgerKeyHash to contain non-hex characters (base64), but it looks like hex")
+	}
+
+	t.Logf("BUG CONFIRMED: LedgerKeyHash contains base64-encoded XDR (%d chars) instead of hex SHA-256 hash (64 chars)",
+		len(output.LedgerKeyHash))
+	t.Logf("This means restored_key.ledger_key_hash cannot be joined with contract_data.ledger_key_hash or contract_code.ledger_key_hash")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestRestoredKeyLedgerKeyHashIsBase64NotHexHash
+    data_integrity_poc_test.go:167: output.LedgerKeyHash = "AAAAAgAAAACI4aa0pXFSj6qfJuIObLw/5zyugLRGYwxb7wFSr3B9eAAAAAAPiaMn"
+    data_integrity_poc_test.go:168: expected hex hash    = "8cc323d734b0263b26708e4842c3a3a9cd3db13146e5e7a5862092749e5d3377"
+    data_integrity_poc_test.go:186: BUG CONFIRMED: LedgerKeyHash contains base64-encoded XDR (64 chars) instead of hex SHA-256 hash (64 chars)
+    data_integrity_poc_test.go:188: This means restored_key.ledger_key_hash cannot be joined with contract_data.ledger_key_hash or contract_code.ledger_key_hash
+--- PASS: TestRestoredKeyLedgerKeyHashIsBase64NotHexHash (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.721s
+```
