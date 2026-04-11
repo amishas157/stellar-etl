@@ -100,3 +100,100 @@ The test fixture at `offer_normalized_test.go:105-113` locks in the buggy behavi
 - **Steps**: Call `TransformOfferNormalized()` on the input. Extract `result.Offer.BaseAmount`, `result.Offer.CounterAmount`, and `result.Offer.Price`. Also extract `result.Market.BaseCode` and `result.Market.CounterCode` for context.
 - **Assertion**: Assert that `result.Market.BaseCode` is `"ETH"` (verified). Then assert `result.Offer.BaseAmount` ≈ `135.16473161502083` (the ETH quantity) — this currently fails because the code returns `262.8450327` (the native quantity). Also assert `result.Offer.Price` ≈ `1.944627341462424` (counter/base) — currently fails, returns `0.5142373444404865` (base/counter).
 - **Fix**: In `extractDimOffer()` at `offer_normalized.go:159-168`, add a branch for `action == "b"` that swaps the assignments: `BaseAmount = offer.Amount * offer.Price`, `CounterAmount = offer.Amount`, `Price = 1.0 / offer.Price`. The existing test fixture expected values also need updating.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestBuySideNormalizedOfferFieldsAreSwapped"
+**Test Language**: Go
+
+### Demonstration
+
+The test calls `TransformOfferNormalized()` with the existing test fixture (selling=native, buying=ETH, action="b") and verifies that the output values do NOT match the correct canonical orientation. BaseAmount returns 262.8450327 (the native/counter quantity) instead of the correct ETH/base quantity of 135.16. CounterAmount returns 135.16 (ETH/base) instead of the correct native/counter quantity of 262.84. Price returns 0.514 (base/counter = ETH/native) instead of the correct 1.945 (counter/base = native/ETH). All three fields are semantically wrong for buy-side offers while the mathematical invariant `CounterAmount = BaseAmount × Price` still holds, making the bug insidious.
+
+### Test Body
+
+```go
+func TestBuySideNormalizedOfferFieldsAreSwapped(t *testing.T) {
+	// 1. Construct input using the existing test helper.
+	//    Selling = native (counter after sort), Buying = ETH (base after sort)
+	//    Amount = 2628450327 stroops = 262.8450327 native
+	//    Price  = 920936891/1790879058 ≈ 0.5142373444404865 (ETH per native)
+	input, err := makeOfferNormalizedTestInput()
+	assert.NoError(t, err)
+
+	// 2. Run through the production code path.
+	result, err := TransformOfferNormalized(input, 100)
+	assert.NoError(t, err)
+
+	// Verify the market orientation: base=ETH, counter=native
+	assert.Equal(t, "ETH", result.Market.BaseCode, "base asset should be ETH")
+	assert.Equal(t, "native", result.Market.CounterCode, "counter asset should be native")
+	assert.Equal(t, "b", result.Offer.Action, "action should be 'b' (seller sells counter)")
+
+	// 3. Demonstrate the bug: the output values do NOT match canonical orientation.
+	//
+	//    For a canonical ETH/native market with action="b":
+	//      - The seller sells native (counter), so offer.Amount is the native quantity.
+	//      - BaseAmount SHOULD be the ETH quantity ≈ 135.16473161502083
+	//      - CounterAmount SHOULD be the native quantity = 262.8450327
+	//      - Price SHOULD be counter/base = native/ETH ≈ 1.944627341462424
+	//
+	//    But the code produces:
+	//      - BaseAmount    = 262.8450327        (native quantity — WRONG, should be ETH)
+	//      - CounterAmount = 135.16473161502083  (ETH quantity — WRONG, should be native)
+	//      - Price         = 0.5142373444404865  (ETH/native — WRONG, should be native/ETH)
+
+	correctBaseAmount := 135.16473161502083 // ETH quantity
+	correctCounterAmount := 262.8450327     // native quantity
+	correctPrice := 1.944627341462424       // native per ETH (counter/base)
+
+	const tolerance = 1e-6
+
+	// BUG 1: BaseAmount returns the native quantity (262.84) instead of ETH (135.16).
+	// Assert the output does NOT match the correct canonical value.
+	baseAmountIsWrong := math.Abs(result.Offer.BaseAmount-correctBaseAmount) > tolerance
+	assert.True(t, baseAmountIsWrong,
+		"BaseAmount should be wrong: got %v, which unexpectedly matches correct value %v",
+		result.Offer.BaseAmount, correctBaseAmount)
+	// Assert the output instead matches the counter-asset quantity (native amount).
+	assert.InDelta(t, 262.8450327, result.Offer.BaseAmount, tolerance,
+		"BaseAmount incorrectly contains the native (counter) quantity instead of ETH (base)")
+
+	// BUG 2: CounterAmount returns the ETH quantity (135.16) instead of native (262.84).
+	counterAmountIsWrong := math.Abs(result.Offer.CounterAmount-correctCounterAmount) > tolerance
+	assert.True(t, counterAmountIsWrong,
+		"CounterAmount should be wrong: got %v, which unexpectedly matches correct value %v",
+		result.Offer.CounterAmount, correctCounterAmount)
+	assert.InDelta(t, 135.16473161502083, result.Offer.CounterAmount, tolerance,
+		"CounterAmount incorrectly contains the ETH (base) quantity instead of native (counter)")
+
+	// BUG 3: Price returns 0.514 (base/counter = ETH/native) instead of 1.945 (counter/base = native/ETH).
+	priceIsWrong := math.Abs(result.Offer.Price-correctPrice) > tolerance
+	assert.True(t, priceIsWrong,
+		"Price should be wrong: got %v, which unexpectedly matches correct value %v",
+		result.Offer.Price, correctPrice)
+	assert.InDelta(t, 0.5142373444404865, result.Offer.Price, tolerance,
+		"Price incorrectly contains the raw offer-side price (base/counter) instead of counter/base")
+
+	// Verify the mathematical invariant CounterAmount ≈ BaseAmount × Price still holds
+	// even with the swapped values — this is why the bug is insidious.
+	invariant := result.Offer.BaseAmount * result.Offer.Price
+	assert.InDelta(t, result.Offer.CounterAmount, invariant, tolerance,
+		"CounterAmount should equal BaseAmount*Price even with buggy values")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestBuySideNormalizedOfferFieldsAreSwapped
+--- PASS: TestBuySideNormalizedOfferFieldsAreSwapped (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.626s
+```
