@@ -38,3 +38,33 @@ The implementation's own tests already show the off-by-one shape: for `batchStar
 ## Anti-Evidence
 
 The rows inside the merged batch are still sourced from real ledgers, so this is not per-row field corruption. The bug is in caller-visible batching semantics and file partitioning: consumers expecting `N`-ledger batches receive larger artifacts than requested.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-11
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — substantially overlaps with fail/data-input/003-streamchanges-boundaries-are-non-overlapping.md (same batch boundary math analysis)
+**Failed At**: reviewer
+
+### Trace Summary
+
+Traced `StreamChanges()` (changes.go:162-178) through multiple input scenarios. When `(end - start + 1) % batchSize == 1`, `batchEnd` equals `end`, the `if batchEnd < end` guard on line 166 is false, so the decrement is skipped and `ExtractBatch` receives an inclusive range spanning `batchSize + 1` ledgers. However, the test suite's "single" case (`start=1, end=65, batchSize=64` → one batch `[1,65]`) explicitly codifies this behavior as intended. The `exportTransformedData` function (export_ledger_entry_changes.go:306-308) includes a comment acknowledging the inclusive end convention and adjusts filenames accordingly with `end+1`.
+
+### Code Paths Examined
+
+- `internal/input/changes.go:162-178` — `StreamChanges` loop: confirmed `batchEnd == end` skips decrement, producing `batchSize+1` inclusive range
+- `internal/input/changes.go:82-158` — `extractBatch`: loop uses `seq <= batchEnd` (inclusive), confirming it processes all `batchSize+1` ledgers
+- `internal/input/changes_test.go:159-168` — "single" test case: explicitly expects `[1,65]` as one batch for `batchSize=64`, proving this is designed behavior
+- `internal/input/changes_test.go:169-179` — "one extra" test case: `end=66` correctly splits into `[1,64]` + `[65,66]`, showing the decrement works for non-edge cases
+- `cmd/export_ledger_entry_changes.go:304-310` — `exportTransformedData`: comment on lines 306-308 explicitly acknowledges inclusive `BatchEnd` and compensates in filename generation
+
+### Why It Failed
+
+This describes **working-as-designed behavior**, not a bug. The `StreamChanges` test suite explicitly codifies the `batchSize+1` merge for the boundary case, and the export command's filename generation includes a comment acknowledging the inclusive convention. The code deliberately avoids creating a 1-ledger remainder batch by absorbing it into the preceding batch. All ledger data is exported exactly once with no duplication or omission — the only difference is the partition boundary, which has no data correctness impact. Additionally, this is substantially the same batch-boundary-math investigation as fail/003, which already concluded the arithmetic is "odd but internally consistent."
+
+### Lesson Learned
+
+When existing tests explicitly codify a batching behavior and the code includes comments acknowledging the convention, the behavior is intentional design — not a latent bug. Batch-size overflow of exactly 1 is a common deliberate choice to avoid degenerate single-element remainder batches.
