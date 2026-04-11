@@ -33,3 +33,37 @@ The current code already crossed the "payment-only" boundary by including `Manag
 ## Anti-Evidence
 
 README still describes `export_assets` in payment-centric terms, so a reviewer could decide the offer-op coverage is intentionally partial. The strongest evidence against that interpretation is the code's existing `ManageSellOffer` support, which already broadens discovery beyond plain payments.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-11
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of 017-path-payment-assets-omitted and 018-manage-sell-offer-buying-asset-omitted
+**Failed At**: reviewer
+
+### Trace Summary
+
+Traced the `export_assets` pipeline through both input readers (`internal/input/assets.go:42`, `internal/input/assets_history_archive.go:32`) and the transformer (`internal/transform/asset.go:18`). All three layers consistently filter for exactly `OperationTypePayment` and `OperationTypeManageSellOffer`. This is the same intentional limited-scope design already established by reviews 017 and 018.
+
+### Code Paths Examined
+
+- `internal/input/assets.go:42` — Filter: `op.Body.Type == xdr.OperationTypePayment || op.Body.Type == xdr.OperationTypeManageSellOffer`
+- `internal/input/assets_history_archive.go:32` — Identical filter in archive-backed reader
+- `internal/transform/asset.go:18` — Guard rejects all types except `Payment` and `ManageSellOffer`
+
+### Why It Failed
+
+This is a **duplicate** of two previously investigated hypotheses that already addressed the exact operation types named here:
+
+1. **017-path-payment-assets-omitted** explicitly noted: "The filter also excludes `ManageBuyOffer`, `CreatePassiveSellOffer`, `ChangeTrust`, and many other operation types that reference assets. If the exclusion of path payments were a bug, these other exclusions would be bugs too — but the command was never designed for comprehensive asset discovery across all operation types."
+
+2. **018-manage-sell-offer-buying-asset-omitted** explicitly noted: "If extracting only Selling from ManageSellOffer is a bug, then by the same logic: not extracting from `ManageBuyOffer`, `CreatePassiveSellOffer`, `ChangeTrust`, and all path-payment types would also be bugs. The 017 review already rejected this reasoning."
+
+Both prior reviews established that `export_assets` has an intentionally limited scope — consistently implemented across three code layers and documented in the README. The argument that "ManageSellOffer inclusion implies ManageBuyOffer/CreatePassiveSellOffer should also be included" was already considered and rejected as describing a feature limitation, not a data correctness bug.
+
+### Lesson Learned
+
+Before hypothesizing about missing operation types in `export_assets`, check whether prior reviews have already established the intentional-scope precedent. The 017 and 018 reviews definitively settled that the two-type filter (`Payment` + `ManageSellOffer`) is a deliberate design choice, not an omission.

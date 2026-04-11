@@ -34,3 +34,37 @@ The asset-reader helper is literally named `GetPaymentOperations`, but its filte
 ## Anti-Evidence
 
 If the same asset also appears in a plain `Payment` or `ManageSellOffer` elsewhere in the requested range, the omission is masked because the command can still emit one row for that asset from the other operation type.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-11
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: PASS — not previously investigated
+**Failed At**: reviewer
+
+### Trace Summary
+
+Traced the complete `export_assets` pipeline from CLI entry (`cmd/export_assets.go`) through both input readers (`internal/input/assets.go:42`, `internal/input/assets_history_archive.go:32`) to the transformer (`internal/transform/asset.go:18`). All three layers consistently filter for exactly `OperationTypePayment` and `OperationTypeManageSellOffer`. The README explicitly documents this command as: "Exports the assets that are created from payment operations over a specified ledger range." The three-layer filter is deliberate and consistent with the documented scope.
+
+### Code Paths Examined
+
+- `cmd/export_assets.go:17-83` — CLI entry point; calls `GetPaymentOperations` or `GetPaymentOperationsHistoryArchive`, then `TransformAsset` on each result
+- `internal/input/assets.go:42` — Filter: `op.Body.Type == xdr.OperationTypePayment || op.Body.Type == xdr.OperationTypeManageSellOffer`
+- `internal/input/assets_history_archive.go:32` — Identical filter to the datastore-backed reader
+- `internal/transform/asset.go:18` — Guard: `if opType != xdr.OperationTypePayment && opType != xdr.OperationTypeManageSellOffer { return error }`
+- `README.md:236-245` — Documents: "Exports the assets that are created from payment operations"
+
+### Why It Failed
+
+This is **working-as-designed behavior**, not a data corruption bug. The hypothesis treats a documented feature limitation as a defect, but the code does exactly what its documentation describes:
+
+1. **Intentional scope**: The command, its helper function (`GetPaymentOperations`), and the transformer all consistently scope to `Payment` and `ManageSellOffer` — this three-layer consistency is a strong signal of deliberate design, not an accidental omission.
+2. **Documented behavior**: Both the README and the Cobra `Long` description explicitly state the command operates on "payment operations." The output matches the spec.
+3. **Broader pattern**: The filter also excludes `ManageBuyOffer`, `CreatePassiveSellOffer`, `ChangeTrust`, and many other operation types that reference assets. If the exclusion of path payments were a bug, these other exclusions would be bugs too — but the command was never designed for comprehensive asset discovery across all operation types.
+
+### Lesson Learned
+
+When `export_assets` consistently documents and implements a two-operation-type scope across all layers (CLI docs, input readers, transformer), the scope is intentional. A feature request to broaden coverage is not a data correctness bug. Look for cases where documented behavior diverges from code behavior, not where both agree on a limited scope.
