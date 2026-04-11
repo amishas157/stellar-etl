@@ -245,3 +245,35 @@ func countOccurrences(t *testing.T, path, substr string) int {
 PASS
 ok  	github.com/stellar/stellar-etl/v2/cmd	1.890s
 ```
+
+---
+
+## Final Review — Needs Revision
+
+**Date**: 2026-04-11
+**Final review by**: gpt-5.4, high
+
+### What Needs Fixing
+
+The current PoC proves only the structural fact that `exportTransformedData()` omits `outFile.Close()`. It does **not** prove the claimed corruption mechanism. `TestExportLedgerEntryChangesMissingFileClose` is a source-text grep, not a runtime reproduction, and `TestExportTransformedDataWritesWithoutClose` passes `cloudProvider=""`, so it never exercises `MaybeUpload()`'s upload path at all.
+
+The runtime evidence also does not show stale or truncated output. `ExportEntry()` writes directly to `*os.File` with `Write`/`WriteString` rather than through a buffered writer, and a separate reader can observe the written bytes before `Close()`. In this review environment, a second reader saw the full file contents before close, which is a benign explanation for the observed behavior and undercuts the stronger "uploaded object is truncated/stale" claim.
+
+### Revision Instructions
+
+Either:
+
+1. Reframe the finding narrowly as an **operational correctness** issue: `export_ledger_entry_changes` never closes JSON files, so close-time writeback errors are never observed and descriptors may remain open until GC/process exit; or
+2. Keep the current framing, but replace the PoC with a **functional** demonstration that the uploaded/read-back bytes are wrong or that a close-time error is actually suppressed under realistic conditions.
+
+For the next PoC attempt:
+
+- Do not rely on source scanning alone.
+- Exercise the real upload/read path, or otherwise show an explicit **expected vs actual** mismatch caused by the missing close.
+- If you pursue the narrower operational-correctness framing, show a realistic observable consequence (for example, an unsurfaced close-time failure or measurable descriptor accumulation), not just the absence of a `Close()` call in source.
+
+### Checks Passed So Far
+
+- The code path is real: `exportTransformedData()` opens the JSON file with `MustOutFile()` and writes entries with `ExportEntry()` before calling `MaybeUpload()`, with no `outFile.Close()` in that function.
+- The missing close is a structural outlier relative to sibling export commands, which do call `outFile.Close()` before upload.
+- No documentation or inline comment reviewed during final review established that this ordering is intentional.
