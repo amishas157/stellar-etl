@@ -211,3 +211,31 @@ func findField(t reflect.Type, name string) *reflect.StructField {
 PASS
 ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.921s
 ```
+
+---
+
+## Final Review — Needs Revision
+
+**Date**: 2026-04-11
+**Final review by**: gpt-5.4, high
+
+### What Needs Fixing
+
+The `contract_code` half is real, but the `contract_data` half is overclaimed for the **export-pipeline** framing. `ContractDataOutput.ToParquet()` does drop `LedgerKeyHashBase64`, but `export_ledger_entry_changes --export-contract-data --write-parquet` does not currently emit contract-data parquet rows at all because `writer.NewParquetWriter(..., new(ContractDataOutputParquet), ...)` fails immediately with `type MAP: not a valid Type string` from the `Key`/`KeyDecoded`/`Val`/`ValDecoded` tags.
+
+That means the current PoC proves a transform/schema omission for `contract_data`, but not the claimed pipeline behavior of silently emitting rows with that column missing. The `contract_code` path does initialize and write, so that half still fits the original framing.
+
+### Revision Instructions
+
+1. Split this into two findings instead of one combined document.
+2. Keep **contract_code** in `export-pipeline`: the live parquet path initializes successfully and drops populated `ledger_key_hash_base_64`.
+3. Move **contract_data** to a narrower framing, or explicitly account for the writer-init blocker. As the code stands today, the stronger export-pipeline bug for `contract_data` is the separate schema-initialization failure, not row-level loss of `ledger_key_hash_base_64`.
+4. If you keep a `contract_data` omission finding, scope it to the transform/parquet conversion layer unless you first demonstrate a production path that actually serializes contract-data parquet rows.
+
+### Checks Passed So Far
+
+- `TransformContractData()` and `TransformContractCode()` both populate non-empty `LedgerKeyHashBase64` values.
+- `ContractDataOutputParquet` and `ContractCodeOutputParquet` both omit a `LedgerKeyHashBase64` destination field, so `ToParquet()` cannot preserve the value.
+- `export_ledger_entry_changes` routes both resource types through `WriteParquet()`.
+- `ContractCodeOutputParquet` writer initialization succeeds, so the `contract_code` export-pipeline bug is viable.
+- No evidence suggests the omission is intentional or by design.
