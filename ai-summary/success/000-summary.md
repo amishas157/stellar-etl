@@ -35,3 +35,4 @@
 - `data-transform/009-trustline-parquet-drops-liquidity-pool-id-strkey.md` — High — trustline Parquet export drops populated `liquidity_pool_id_strkey` for pool-share trustlines
 - `data-transform/010-ledger-entry-parquet-collapses-null-sponsor.md` — High — ledger-entry Parquet export rewrites null `sponsor` values to empty strings
 - `data-transform/011-effects-parquet-collapses-address-muxed-nullability.md` — High — effect Parquet export rewrites null `address_muxed` to empty strings
+- `data-integrity/004-parquet-upload-precedes-write.md` — Medium — four one-shot exporters upload a missing or stale parquet artifact before generating the current file
