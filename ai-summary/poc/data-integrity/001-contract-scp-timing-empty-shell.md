@@ -73,3 +73,140 @@ This is structurally identical to the confirmed findings 005 (ParallelCompute) a
 - **Setup**: Construct a mock `ingest.Change` with `LedgerEntryTypeConfigSetting` where `ConfigSettingId = ConfigSettingIdConfigSettingScpTiming` (16) and `ContractScpTiming` populated with non-zero values for all 5 fields (e.g., `LedgerTargetCloseTimeMilliseconds=5000`, `NominationTimeoutInitialMilliseconds=1000`, etc.)
 - **Steps**: Call `TransformConfigSetting(change, header)` and inspect the returned `ConfigSettingOutput`
 - **Assertion**: Assert that the output contains the 5 SCP timing field values. Currently this will fail because the schema has no fields for them, confirming the empty-shell bug. The PoC should demonstrate that the row is emitted (no error) but the timing payload is absent.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestConfigSettingScpTimingEmptyShell"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `ConfigSettingEntry` with `ConfigSettingIdConfigSettingScpTiming` (enum 16) populated with 5 non-zero SCP timing values, passes it through `TransformConfigSetting()`, and confirms the function succeeds (no error, correct `config_setting_id=16` metadata) but the JSON output contains zero of the 5 timing fields. All timing payload data is silently discarded because `ConfigSettingOutput` has no destination fields and the transformer never calls `GetContractScpTiming()`.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/ingest"
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestConfigSettingScpTimingEmptyShell demonstrates that TransformConfigSetting
+// silently drops all 5 SCP timing payload fields when processing a
+// CONFIG_SETTING_CONTRACT_SCP_TIMING entry (config_setting_id=16).
+// The function succeeds and emits a row with correct metadata but zero timing values.
+func TestConfigSettingScpTimingEmptyShell(t *testing.T) {
+	// 1. Construct a ConfigSettingEntry with ContractScpTiming arm
+	//    populated with distinctive non-zero values.
+	scpTiming := xdr.ConfigSettingScpTiming{
+		LedgerTargetCloseTimeMilliseconds:      5000,
+		NominationTimeoutInitialMilliseconds:    1000,
+		NominationTimeoutIncrementMilliseconds:  500,
+		BallotTimeoutInitialMilliseconds:        2000,
+		BallotTimeoutIncrementMilliseconds:      750,
+	}
+
+	configEntry := xdr.ConfigSettingEntry{
+		ConfigSettingId: xdr.ConfigSettingIdConfigSettingScpTiming, // enum 16
+		ContractScpTiming: &scpTiming,
+	}
+
+	ledgerEntry := xdr.LedgerEntry{
+		LastModifiedLedgerSeq: 50000000,
+		Data: xdr.LedgerEntryData{
+			Type:          xdr.LedgerEntryTypeConfigSetting,
+			ConfigSetting: &configEntry,
+		},
+	}
+
+	change := ingest.Change{
+		ChangeType: xdr.LedgerEntryChangeTypeLedgerEntryCreated,
+		Type:       xdr.LedgerEntryTypeConfigSetting,
+		Pre:        nil,
+		Post:       &ledgerEntry,
+	}
+
+	header := xdr.LedgerHeaderHistoryEntry{
+		Header: xdr.LedgerHeader{
+			ScpValue: xdr.StellarValue{
+				CloseTime: 1700000000,
+			},
+			LedgerSeq: 50000000,
+		},
+	}
+
+	// 2. Run through the production code path.
+	output, err := TransformConfigSetting(change, header)
+	if err != nil {
+		t.Fatalf("TransformConfigSetting returned unexpected error: %v", err)
+	}
+
+	// 3. Verify the row IS emitted with correct metadata (not skipped).
+	if output.ConfigSettingId != 16 {
+		t.Fatalf("Expected ConfigSettingId=16, got %d", output.ConfigSettingId)
+	}
+	if output.LastModifiedLedger != 50000000 {
+		t.Fatalf("Expected LastModifiedLedger=50000000, got %d", output.LastModifiedLedger)
+	}
+
+	// 4. Demonstrate the bug: serialize to JSON and check that none of the
+	//    5 SCP timing field values are present with their non-zero input values.
+	//    The struct has no destination fields, so all timing data is silently lost.
+	jsonBytes, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("Failed to marshal output: %v", err)
+	}
+	jsonStr := string(jsonBytes)
+
+	// The 5 timing fields should appear in the JSON output if properly handled.
+	// They don't, because the schema has no fields for them.
+	timingFields := []string{
+		"ledger_target_close_time_milliseconds",
+		"nomination_timeout_initial_milliseconds",
+		"nomination_timeout_increment_milliseconds",
+		"ballot_timeout_initial_milliseconds",
+		"ballot_timeout_increment_milliseconds",
+	}
+
+	missingFields := []string{}
+	for _, field := range timingFields {
+		if !strings.Contains(jsonStr, field) {
+			missingFields = append(missingFields, field)
+		}
+	}
+
+	if len(missingFields) > 0 {
+		t.Errorf("BUG CONFIRMED: ConfigSettingScpTiming entry (id=16) processed successfully "+
+			"but %d of 5 SCP timing fields are missing from the output.\n"+
+			"Input values: LedgerTargetCloseTime=5000, NominationTimeoutInitial=1000, "+
+			"NominationTimeoutIncrement=500, BallotTimeoutInitial=2000, BallotTimeoutIncrement=750\n"+
+			"Missing fields: %v\n"+
+			"JSON output: %s",
+			len(missingFields), missingFields, jsonStr)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestConfigSettingScpTimingEmptyShell
+    data_integrity_poc_test.go:97: BUG CONFIRMED: ConfigSettingScpTiming entry (id=16) processed successfully but 5 of 5 SCP timing fields are missing from the output.
+        Input values: LedgerTargetCloseTime=5000, NominationTimeoutInitial=1000, NominationTimeoutIncrement=500, BallotTimeoutInitial=2000, BallotTimeoutIncrement=750
+        Missing fields: [ledger_target_close_time_milliseconds nomination_timeout_initial_milliseconds nomination_timeout_increment_milliseconds ballot_timeout_initial_milliseconds ballot_timeout_increment_milliseconds]
+        JSON output: {"config_setting_id":16,"contract_max_size_bytes":0,"ledger_max_instructions":0,...,"last_modified_ledger":50000000,"ledger_entry_change":0,"deleted":false,"closed_at":"2023-11-14T22:13:20Z","ledger_sequence":50000000}
+--- FAIL: TestConfigSettingScpTimingEmptyShell (0.00s)
+FAIL
+```
