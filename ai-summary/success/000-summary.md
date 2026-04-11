@@ -49,3 +49,4 @@
 - `data-transform/012-transaction-parquet-fabricates-optional-fields.md` — High — transaction Parquet export rewrites absent muxed/fee-bump metadata to `""` and `0`
 - `data-transform/013-operation-parquet-collapses-source-account-muxed-nullability.md` — High — operation Parquet export rewrites absent `source_account_muxed` to empty strings
 - `export-pipeline/015-trustline-asset-id-hashes-raw-enum.md` — High — trustline export hashes `asset_id` from raw XDR enum names instead of the canonical exported `asset_type`
+- `export-pipeline/016-token-transfer-parquet-request-silently-ignored.md` — Medium — `export_token_transfer --write-parquet` exits successfully, writes JSON, and silently skips the requested parquet artifact
