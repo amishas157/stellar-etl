@@ -33,3 +33,31 @@ The internal transformer never reads a second source metric before populating `T
 ## Anti-Evidence
 
 The schema may retain `total_byte_size_of_bucket_list` for backward compatibility with downstream tables. But unlike Protocol 23 rename aliases, the current XDR model does not expose a same-semantic bucket-list field that could justify copying the live-state value into this column.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-11
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of ai-summary/fail/utilities/012-ledger-bucket-size-column-is-a-legacy-alias.md
+**Failed At**: reviewer
+
+### Trace Summary
+
+This hypothesis is substantially equivalent to a previously investigated finding. `ai-summary/fail/utilities/012-ledger-bucket-size-column-is-a-legacy-alias.md` examined the identical code path (`TransformLedger()` assigning both `TotalByteSizeOfBucketList` and `TotalByteSizeOfLiveSorobanState` from the same variable) and concluded NOT_VIABLE. Additionally, `ai-summary/fail/export-pipeline/004-config-setting-bucket-columns-mirror-live-state.md` investigated the same conceptual pattern for config-setting exports and found it to be intentional Protocol 23 backward-compatibility aliasing.
+
+### Code Paths Examined
+
+- `internal/transform/ledger.go:61-91` — Reads `TotalByteSizeOfLiveSorobanState` from `lcmV1` and `lcmV2`, stores in single local variable
+- `internal/transform/ledger.go:125-126` — Both output fields assigned from `outputTotalByteSizeOfLiveSorobanState`
+- `internal/transform/schema.go:34-35` — Two distinct columns in the output schema
+
+### Why It Failed
+
+Duplicate of a prior investigation. The earlier review (`012-ledger-bucket-size-column-is-a-legacy-alias.md`) confirmed that the current XDR `LedgerCloseMeta` versions do not expose a distinct bucket-list byte-size field. The `TotalByteSizeOfBucketList` column is a legacy compatibility alias from the Protocol 23 rename (`TotalByteSizeOfBucketList` → `TotalByteSizeOfLiveSorobanState`), following the same dual-column aliasing pattern documented in `004-config-setting-bucket-columns-mirror-live-state.md`. Without a distinct XDR source field, there is no wrong-source mapping — the code is working as designed.
+
+### Lesson Learned
+
+Ledger-level `bucket_list` columns follow the same Protocol 23 backward-compatibility aliasing pattern as config-setting `bucket_list` columns. Both retain old column names populated from renamed XDR fields.
