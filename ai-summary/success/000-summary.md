@@ -65,3 +65,4 @@
 - `data-input/007-zero-limit-ledger-readers-export-first-ledger.md` — High — `export_ledgers` and `export_token_transfer` still emit first-ledger data when `--limit 0` requests an empty export
 - `data-input/008-continuous-change-export-prepares-bounded-zero-range.md` — Medium — `export_ledger_entry_changes` continuous mode prepares a bounded `[start,0]` range and exits instead of streaming live batches
 - `export-pipeline/017-operation-details-price-rounded-to-zero.md` — Critical — offer-operation `details.price` parses `xdr.Price.String()` and silently rounds tiny non-zero prices down to `0`
+- `data-transform/019-transfer-style-operation-details-round-large-amounts.md` — Critical — transfer-style `history_operations.details` amounts round distinct large stroop values together
