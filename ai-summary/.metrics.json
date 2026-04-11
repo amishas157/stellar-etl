@@ -1,9 +1,9 @@
 {
-  "hypothesis_viable": 256,
+  "hypothesis_viable": 259,
   "hypothesis_not_viable": 127,
   "review_viable": 108,
   "review_not_viable": 104,
-  "poc_viable": 107,
+  "poc_viable": 108,
   "poc_not_viable": 0,
   "final_review_viable": 85,
   "final_review_not_viable": 20,
@@ -12,13 +12,13 @@
   "publishes": 85,
   "agent_failures": 29,
   "agent_timeouts": 0,
-  "total_spawned": 613,
+  "total_spawned": 615,
   "input_tokens": 0,
-  "output_tokens": 6602117,
+  "output_tokens": 6660320,
   "cache_read_tokens": 0,
   "per_subsystem": {
     "data-integrity": {
-      "hypothesis_viable": 38,
+      "hypothesis_viable": 41,
       "hypothesis_not_viable": 21,
       "review_viable": 16,
       "poc_viable": 15,
@@ -66,7 +66,7 @@
       "hypothesis_not_viable": 30,
       "review_viable": 23,
       "review_not_viable": 14,
-      "poc_viable": 22,
+      "poc_viable": 23,
       "final_review_viable": 17,
       "final_review_revisions": 1,
       "final_review_not_viable": 4
@@ -91,7 +91,7 @@
   },
   "per_model": {
     "gpt-5.4": {
-      "hypothesis_viable": 256,
+      "hypothesis_viable": 259,
       "agent_failures": 8,
       "final_review_viable": 85,
       "final_review_not_viable": 20,
@@ -99,7 +99,7 @@
     },
     "claude-opus-4-6": {
       "review_viable": 108,
-      "poc_viable": 107,
+      "poc_viable": 108,
       "review_not_viable": 104,
       "agent_failures": 21
     },
@@ -108,7 +108,7 @@
   "tokens_by_stage": {
     "hypothesis": {
       "input": 0,
-      "output": 2018151,
+      "output": 2067675,
       "cache_read": 0
     },
     "reviewer": {
@@ -118,7 +118,7 @@
     },
     "poc": {
       "input": 0,
-      "output": 1342387,
+      "output": 1351066,
       "cache_read": 0
     },
     "final_review": {
@@ -140,12 +140,12 @@
   "tokens_by_model": {
     "gpt-5.4": {
       "input": 0,
-      "output": 3414291,
+      "output": 3463815,
       "cache_read": 0
     },
     "claude-opus-4-6": {
       "input": 0,
-      "output": 2772154,
+      "output": 2780833,
       "cache_read": 0
     },
     "claude-sonnet-4-6": {
@@ -155,16 +155,6 @@
     }
   },
   "agent_durations": [
-    [
-      "reviewer",
-      "claude-opus-4-6",
-      158.2
-    ],
-    [
-      "final_review",
-      "gpt-5.4",
-      267.1
-    ],
     [
       "reviewer",
       "claude-opus-4-6",
@@ -1154,6 +1144,16 @@
       "publish",
       "claude-sonnet-4-6",
       151.9
+    ],
+    [
+      "poc",
+      "claude-opus-4-6",
+      238.7
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      992.5
     ]
   ],
   "costs": {
@@ -1162,10 +1162,10 @@
         "models": {
           "claude-opus-4-6": {
             "input_tokens": 0,
-            "output_tokens": 2772154,
+            "output_tokens": 2780833,
             "cache_read_tokens": 0,
-            "total_cost": 30.6,
-            "premium_requests": 1020
+            "total_cost": 30.69,
+            "premium_requests": 1023
           },
           "claude-sonnet-4-6": {
             "input_tokens": 0,
@@ -1176,22 +1176,22 @@
           },
           "gpt-5.4": {
             "input_tokens": 0,
-            "output_tokens": 3414291,
+            "output_tokens": 3463815,
             "cache_read_tokens": 0,
-            "total_cost": 5.46,
-            "premium_requests": 182
+            "total_cost": 5.49,
+            "premium_requests": 183
           }
         },
-        "provider_cost": 38.73
+        "provider_cost": 38.85
       }
     },
-    "total_cost": 38.73,
+    "total_cost": 38.85,
     "stages": {
       "hypothesis": {
         "copilot": {
           "input_tokens": 0,
-          "output_tokens": 2018151,
-          "premium_requests": 63
+          "output_tokens": 2067675,
+          "premium_requests": 64
         }
       },
       "reviewer": {
@@ -1204,8 +1204,8 @@
       "poc": {
         "copilot": {
           "input_tokens": 0,
-          "output_tokens": 1342387,
-          "premium_requests": 360
+          "output_tokens": 1351066,
+          "premium_requests": 363
         }
       },
       "final_review": {
