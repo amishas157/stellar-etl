@@ -64,3 +64,84 @@ The bug is a strict-less-than loop guard (`<`) that should be less-than-or-equal
 - **Setup**: Add a test case to the existing table-driven test with `batchStart: 50, batchEnd: 50` (single ledger)
 - **Steps**: Run `StreamChanges` with `start == end` using `mockExtractBatch`, collect batches from the channel
 - **Assertion**: Assert exactly one batch is received with `BatchStart == 50` and `BatchEnd == 50`. Currently this produces zero batches, confirming the bug.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/input/data_integrity_poc_test.go
+**Test Name**: "TestSingleLedgerStreamChangesProducesNoBatches"
+**Test Language**: Go
+
+### Demonstration
+
+The test calls `StreamChanges(nil, 50, 50, 64, ...)` — a single-ledger export where start equals end. It collects all batches from the channel and confirms that zero batches are produced. A correct implementation should emit exactly one batch covering ledger 50, but the strict less-than loop guard (`batchStart < batchEnd`) on line 165 of `changes.go` evaluates to false when both values are 50, causing the loop body to be skipped entirely.
+
+### Test Body
+
+```go
+package input
+
+import (
+	"testing"
+
+	"github.com/stellar/stellar-etl/v2/internal/utils"
+)
+
+// TestSingleLedgerStreamChangesProducesNoBatches demonstrates that when
+// start == end (a single-ledger export), StreamChanges produces zero batches
+// because the loop guard uses strict less-than instead of less-than-or-equal.
+//
+// A correct implementation should produce exactly 1 batch for ledger 50,
+// but the bug causes 0 batches — silently dropping all changes.
+func TestSingleLedgerStreamChangesProducesNoBatches(t *testing.T) {
+	batchSize := uint32(64)
+	changeChan := make(chan ChangeBatch, 10)
+	closeChan := make(chan int)
+	env := utils.EnvironmentDetails{
+		NetworkPassphrase: "",
+		ArchiveURLs:       nil,
+		BinaryPath:        "",
+		CoreConfig:        "",
+	}
+	logger := utils.NewEtlLogger()
+	ExtractBatch = mockExtractBatch
+
+	// Run StreamChanges with start == end (single ledger 50)
+	go StreamChanges(nil, 50, 50, batchSize, changeChan, closeChan, env, logger)
+
+	var batches []ChangeBatch
+	for b := range changeChan {
+		batches = append(batches, b)
+	}
+
+	// BUG: The correct behavior is exactly 1 batch covering ledger 50.
+	// Due to the bug (batchStart < batchEnd is false when both are 50),
+	// StreamChanges produces 0 batches — silently yielding empty output.
+	//
+	// This assertion confirms the buggy behavior: if the test passes,
+	// the bug is proven (data is silently lost for single-ledger exports).
+	actualBatchCount := len(batches)
+	if actualBatchCount != 0 {
+		t.Errorf("Expected 0 batches due to the single-ledger bug, but got %d. "+
+			"If this fails, the bug may have been fixed.", actualBatchCount)
+	}
+	t.Logf("CONFIRMED: Single-ledger export (start=50, end=50) produced %d batches. "+
+		"Expected 1 for correct behavior, but the loop guard 'batchStart < batchEnd' "+
+		"(changes.go:165) skips the body when start==end, silently producing empty output.",
+		actualBatchCount)
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestSingleLedgerStreamChangesProducesNoBatches
+    data_integrity_poc_test.go:47: CONFIRMED: Single-ledger export (start=50, end=50) produced 0 batches. Expected 1 for correct behavior, but the loop guard 'batchStart < batchEnd' (changes.go:165) skips the body when start==end, silently producing empty output.
+--- PASS: TestSingleLedgerStreamChangesProducesNoBatches (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/input	0.745s
+```
