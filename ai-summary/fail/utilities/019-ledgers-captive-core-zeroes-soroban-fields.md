@@ -32,3 +32,32 @@ The history-archive helper never fills the `LCM` half of the transport struct, y
 ## Anti-Evidence
 
 This only corrupts ledgers whose correct values are non-zero or non-empty; pre-Soroban ledgers legitimately export zeros there. The default non-`--captive-core` path also avoids the issue because `GetLedgers()` carries the real `LCM`.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-11
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of ai-summary/success/data-input/001-export-ledgers-captive-core-drops-soroban-lcm-fields.md.gh-published
+**Failed At**: reviewer
+
+### Trace Summary
+
+Traced the code path from `cmd/export_ledgers.go:28` where `UseCaptiveCore=true` routes to `GetLedgersHistoryArchive()`, through `internal/input/ledgers_history_archive.go:24-26` where `HistoryArchiveLedgerAndLCM{Ledger: ledger}` is constructed without setting `LCM`, to `internal/transform/ledger.go:61-91` where `lcm.GetV1()` and `lcm.GetV2()` both return `ok=false` on the zero-valued LCM, leaving all Soroban output fields at their zero defaults. The mechanism described in the hypothesis is correct.
+
+### Code Paths Examined
+
+- `cmd/export_ledgers.go:28-31` — confirms `UseCaptiveCore` routes to `GetLedgersHistoryArchive()`
+- `internal/input/ledgers_history_archive.go:24-26` — confirms `LCM` field is never populated
+- `internal/transform/ledger.go:61-91` — confirms Soroban fields come exclusively from `lcm.GetV1()` / `lcm.GetV2()`
+- `internal/input/ledgers.go:79-82` — confirms the normal path populates both `Ledger` and `LCM`
+
+### Why It Failed
+
+This is an exact duplicate of an already-confirmed and published finding. The bug was previously investigated under the `data-input` subsystem and confirmed as a High-severity success in `ai-summary/success/data-input/001-export-ledgers-captive-core-drops-soroban-lcm-fields.md.gh-published`. That investigation covers the identical code paths (`cmd/export_ledgers.go` → `GetLedgersHistoryArchive()` → zero-valued `LCM` → `TransformLedger` zeroes Soroban fields), the identical affected fields (`SorobanFeeWrite1Kb`, `TotalByteSizeOfLiveSorobanState`, evicted keys), and includes a complete PoC test. There is also an existing PoC in `ai-summary/poc/utilities/001-captive-core-flag-routes-to-history-archive.md` covering this same finding.
+
+### Lesson Learned
+
+Cross-subsystem duplicate checking is essential. This hypothesis was filed under `utilities` but the identical bug was already confirmed under `data-input`. The bug spans both subsystems (the input layer omits LCM, the transform layer silently accepts the zero value), so hypotheses about it can originate from either subsystem's perspective.

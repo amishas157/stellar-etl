@@ -34,3 +34,32 @@ The history-archive asset helper leaves a code comment acknowledging that it doe
 ## Anti-Evidence
 
 If the selected ledger range contains no qualifying payment or manage-sell-offer operations, the transform loop never touches the bad `LCM` and the command may appear healthy. The normal non-`--captive-core` path also avoids the issue by passing real `LedgerCloseMeta` values from `CreateLedgerBackend()`.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-11
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of ai-summary/success/utilities/003-captive-core-flag-routes-to-history-archive.md
+**Failed At**: reviewer
+
+### Trace Summary
+
+The hypothesis describes the `export_assets --captive-core` panic path where `GetPaymentOperationsHistoryArchive()` sets `LedgerCloseMeta: xdr.LedgerCloseMeta{}` and `TransformAsset()` subsequently panics when calling `utils.GetCloseTime(lcm)` which dereferences the unset V0 arm. This exact mechanism was already investigated, confirmed, and published as part of a broader finding covering both `export_assets` and `export_ledgers` under the `--captive-core` flag.
+
+### Code Paths Examined
+
+- `cmd/export_assets.go:30-33` — confirms `UseCaptiveCore` routes to `GetPaymentOperationsHistoryArchive()`
+- `internal/input/assets_history_archive.go:33-39` — confirms `LedgerCloseMeta: xdr.LedgerCloseMeta{}` is explicitly set
+- `internal/transform/asset.go:45-50` — confirms unconditional reads of close time and ledger sequence from LCM
+- `internal/utils/main.go:968-976` — confirms `GetCloseTime()`/`GetLedgerSequence()` forward to `lcm.LedgerHeaderHistoryEntry()`
+
+### Why It Failed
+
+This is an exact duplicate of the already-confirmed and published finding in `ai-summary/success/utilities/003-captive-core-flag-routes-to-history-archive.md`. That finding explicitly documents: "`export_assets --captive-core` feeds `xdr.LedgerCloseMeta{}` into `TransformAsset`, which panics when `utils.GetCloseTime()` calls `LedgerHeaderHistoryEntry()` on the unset union arm." The success file covers the identical code paths (`cmd/export_assets.go` → `GetPaymentOperationsHistoryArchive()` → `LedgerCloseMeta{}` → `TransformAsset` panic), the identical trigger (`--captive-core` flag), and includes a complete PoC test (`TestZeroLCMCrashesTransformAsset`).
+
+### Lesson Learned
+
+The success file 003 in `utilities/` covers both the `export_ledgers` silent zeroing and the `export_assets` panic as two manifestations of the same root cause (inverted `--captive-core` flag routing). New hypotheses about individual symptoms of this root cause should be checked against existing multi-symptom findings.
