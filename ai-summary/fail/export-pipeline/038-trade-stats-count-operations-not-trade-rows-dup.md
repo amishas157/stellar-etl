@@ -34,3 +34,30 @@ Run `export_trades` on a ledger range containing a path payment or offer operati
 ## Anti-Evidence
 
 As with the effects path, reviewers may decide the stats intentionally measure source-operation transforms rather than output rows. The issue is only meaningful if the final stats log is supposed to represent exported trade-row counts.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-11
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — exact duplicate of fail/export-pipeline/036-trade-stats-count-operations-not-trade-rows.md
+**Failed At**: reviewer
+
+### Trace Summary
+
+This hypothesis is an exact duplicate of an already-reviewed and rejected investigation at `ai-summary/fail/export-pipeline/036-trade-stats-count-operations-not-trade-rows.md`. The prior review comprehensively traced all 9 export commands and confirmed that `PrintTransformStats` consistently counts at input-item granularity across the entire codebase — this is working-as-designed behavior, not a bug.
+
+### Code Paths Examined
+
+- `cmd/export_trades.go:28-64` — already examined in fail/036
+- `cmd/command_utils.go:90-103` — already examined in fail/036
+
+### Why It Failed
+
+**Duplicate of fail/export-pipeline/036-trade-stats-count-operations-not-trade-rows.md.** The prior review established that `PrintTransformStats` is an input-counting convention across all export commands, including all four 1:N fan-out exporters (trades, effects, contract_events, token_transfers). This is a codebase-wide architectural decision, not a per-command bug. See also fail/035 (effects variant) and fail/034 (assets variant) for the same class of hypothesis.
+
+### Lesson Learned
+
+This exact hypothesis was already investigated. The stats-counting convention is documented across multiple fail files (034, 035, 036) and in the summary.md meta-patterns.
