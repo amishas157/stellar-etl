@@ -33,3 +33,36 @@ The JSON schema explicitly carries `OperationDetailsJSON map[string]interface{} 
 ## Anti-Evidence
 
 The parquet `details` string still contains similar payload information if a downstream reader reparses the JSON string manually. The deviation is the silent loss of the named `details_json` column and its typed companion representation, not the complete loss of operation details.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-11
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of `ai-summary/fail/data-transform/summary.md` entry 012 ("Operation Parquet omits `details_json`")
+**Failed At**: reviewer
+
+### Trace Summary
+
+Traced `TransformOperation` at `operation.go:85-98` and confirmed that both `OperationDetails` (line 92) and `OperationDetailsJSON` (line 97) are assigned the exact same variable `outputDetails`. They are literally the same Go map. The Parquet converter at `parquet_converter.go:153` serializes `oo.OperationDetails` via `toJSONString()`, producing a JSON string that contains the identical data. There is no information loss — `details_json` is just an alias for the same map, and the Parquet `details` column already encodes it fully.
+
+### Code Paths Examined
+
+- `internal/transform/operation.go:92,97` — both `OperationDetails` and `OperationDetailsJSON` assigned from same `outputDetails` variable
+- `internal/transform/parquet_converter.go:153` — `OperationDetails: toJSONString(oo.OperationDetails)` serializes the map to a JSON string
+- `internal/transform/schema.go:142,149` — JSON schema has both `details` (map) and `details_json` (map)
+- `internal/transform/schema_parquet.go:122` — Parquet schema has `details` (string)
+
+### Why It Failed
+
+Two independent reasons:
+
+1. **Duplicate**: This exact hypothesis was already investigated and rejected as `data-transform` fail entry 012. The summary documents: "Operation Parquet omits `details_json` — `TransformOperation()` writes the same map to both `OperationDetails` and `OperationDetailsJSON`; Parquet preserves it via the `details` column."
+
+2. **No data loss**: `OperationDetails` and `OperationDetailsJSON` are assigned the same `outputDetails` map (operation.go lines 92 and 97). The Parquet `details` column serializes this map to a JSON string via `toJSONString()`. A downstream consumer can parse the JSON string to recover the exact same key-value pairs that `details_json` would have provided. The "missing" column is not a separate data source — it's an alias for data already present.
+
+### Lesson Learned
+
+When two schema fields are assigned from the same source variable, omitting one from Parquet is not data loss — verify assignment sources before claiming a column carries unique data. Also, check the data-transform fail summary for prior Parquet schema omission investigations.
