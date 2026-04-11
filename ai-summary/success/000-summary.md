@@ -52,3 +52,4 @@
 - `export-pipeline/016-token-transfer-parquet-request-silently-ignored.md` — Medium — `export_token_transfer --write-parquet` exits successfully, writes JSON, and silently skips the requested parquet artifact
 - `data-transform/014-muxed-soroban-fee-balance-mismatch.md` — Critical — muxed Soroban fee accounts export negative inclusion fees and zero refunds by matching `M...` addresses against ledger `G...` entries
 - `data-input/003-single-ledger-change-exports-produce-no-batches.md` — High — `StreamChanges` emits no batch at all for valid one-ledger ranges, so `export_ledger_entry_changes` can finish successfully with empty output
+- `data-input/004-effect-limit-counts-transactions-instead-of-effects.md` — Medium — `export_effects --limit` counts transactions before emitted effect rows and can exceed the requested export bound

@@ -31,3 +31,31 @@ The code itself distinguishes request fields from realized result fields by fetc
 ## Anti-Evidence
 
 The operation result code is exported alongside the details map, so careful consumers can infer the payment failed. But the details payload itself is still wrong: it contains a specific executed amount that never occurred, and zero is a plausible value for downstream systems that do not special-case every failure code.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-11
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of fail/data-transform/030-failed-path-payments-fabricate-zero-outcome-amounts.md
+**Failed At**: reviewer
+
+### Trace Summary
+
+This hypothesis is an exact duplicate of investigation 030 in the fail directory, which already traced the same code paths and reached the same conclusion. The prior review confirmed that both `extractOperationDetails()` and the `Details()` method use `amount.String(0)` as a default for failed path payments, and that this matches the canonical upstream Horizon SDK implementation identically.
+
+### Code Paths Examined
+
+- `internal/transform/operation.go:619-656` — strict-receive arm: already traced in investigation 030
+- `internal/transform/operation.go:660-697` — strict-send arm: already traced in investigation 030
+- `stellar/go processors/operation/path_payment_strict_receive_details.go` — upstream SDK uses same zero-default pattern
+
+### Why It Failed
+
+Exact duplicate of `fail/data-transform/030-failed-path-payments-fabricate-zero-outcome-amounts.md`. That investigation already confirmed the behavior is working as designed and matches the canonical Horizon SDK implementation. The zero-default pattern for failed path payment outcome amounts is the ecosystem-standard convention, not a data fabrication bug.
+
+### Lesson Learned
+
+Check existing fail entries for identical titles and mechanisms before re-submitting a hypothesis. This exact investigation was already completed under file 030.
