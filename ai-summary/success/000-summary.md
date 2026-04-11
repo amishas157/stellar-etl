@@ -77,3 +77,4 @@
 - `export-pipeline/017-ledger-transaction-parquet-request-silently-ignored.md` — Medium — `export_ledger_transaction --write-parquet` exits successfully, writes JSON, and silently skips the requested parquet artifact
 - `utilities/003-captive-core-flag-routes-to-history-archive.md` — High — `--captive-core` routes `export_ledgers` and `export_assets` through history-archive readers that omit `LedgerCloseMeta`, zeroing Soroban ledger fields and crashing asset export
 - `toid/001-contract-event-parquet-drops-operation-toid.md` — High — contract event Parquet conversion zeroes populated `operation_id` values
+- `external-io/005-single-ledger-change-exports-produce-no-batches.md` — High — `StreamChanges` emits no batch at all for valid one-ledger ranges, so `export_ledger_entry_changes` can finish successfully with empty output
