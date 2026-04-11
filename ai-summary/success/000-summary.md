@@ -60,3 +60,4 @@
 - `data-input/005-contract-events-limit-counts-transactions-instead-of-contract-event-rows.md` — Medium — `export_contract_events --limit` counts transactions before emitted contract-event rows and can return empty or oversized exports
 - `data-input/006-token-transfer-limit-counts-ledgers-instead-of-token-transfer-rows.md` — Medium — `export_token_transfer --limit` counts ledgers before emitted token-transfer rows and can return empty or oversized exports
 - `cli-commands/006-gcs-upload-leaks-source-file-readers.md` — Medium — `UploadTo()` leaves local upload readers open until GC and can exhaust file descriptors during repeated GCS uploads
+- `cli-commands/007-ledger-range-command-ignores-output-write-failures.md` — Medium — `get_ledger_range_from_times -o <path>` ignores file write and close failures, exits 0, and can leave an empty range file behind
