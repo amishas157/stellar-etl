@@ -74,3 +74,114 @@ Severity downgraded from High to Medium because the confirmed success finding `0
 - **Setup**: Construct a `TransactionOutput` with `TxSigners: []string{"GABC..."}` and call `ToParquet()`
 - **Steps**: Cast the result to `TransactionOutputParquet` and inspect whether a `TxSigners` field exists via reflection, or simply verify the struct definition lacks the field
 - **Assertion**: Assert that `TransactionOutputParquet` should contain a `TxSigners` field — currently it does not, confirming the schema drift. A compile-time check: `_ = TransactionOutputParquet{}.TxSigners` would fail to compile.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestTransactionParquetDropsTxSigners"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `TransactionOutput` with two signers in `TxSigners` and one entry in `ExtraSigners`, then calls `ToParquet()`. Using reflection, it confirms that `ExtraSigners` (also `[]string`) is correctly preserved in the parquet struct, but `TxSigners` has no corresponding field in `TransactionOutputParquet` at all. This proves the parquet schema silently drops `tx_signers` data for every transaction while the identical type `ExtraSigners` is correctly mapped — a schema drift bug.
+
+### Test Body
+
+```go
+func TestTransactionParquetDropsTxSigners(t *testing.T) {
+	signers := []string{
+		"GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRST",
+		"GXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJK",
+	}
+
+	// 1. Construct a TransactionOutput with non-empty TxSigners
+	txOutput := TransactionOutput{
+		TransactionHash: "abc123",
+		LedgerSequence:  100,
+		Account:         "GABC",
+		TxSigners:       signers,
+		ExtraSigners:    []string{"extra1"},
+		CreatedAt:       time.Now(),
+		ClosedAt:        time.Now(),
+	}
+
+	// 2. Verify JSON output includes tx_signers
+	jsonBytes, err := json.Marshal(txOutput)
+	if err != nil {
+		t.Fatalf("Failed to marshal TransactionOutput to JSON: %v", err)
+	}
+	jsonStr := string(jsonBytes)
+	if !strings.Contains(jsonStr, "tx_signers") {
+		t.Fatalf("JSON output should contain tx_signers field, got: %s", jsonStr)
+	}
+	if !strings.Contains(jsonStr, signers[0]) {
+		t.Fatalf("JSON output should contain signer value %s", signers[0])
+	}
+	t.Logf("JSON output contains tx_signers with %d signers — correct", len(signers))
+
+	// 3. Convert to Parquet and verify tx_signers is missing
+	parquetResult := txOutput.ToParquet()
+	parquetVal := reflect.ValueOf(parquetResult)
+	parquetType := parquetVal.Type()
+
+	// Check that ExtraSigners IS present (proving []string fields can exist in parquet)
+	extraSignersField := parquetVal.FieldByName("ExtraSigners")
+	if !extraSignersField.IsValid() {
+		t.Fatalf("ExtraSigners field should exist in TransactionOutputParquet")
+	}
+	extraSlice, ok := extraSignersField.Interface().([]string)
+	if !ok || len(extraSlice) != 1 || extraSlice[0] != "extra1" {
+		t.Fatalf("ExtraSigners should be preserved in parquet, got %v", extraSignersField.Interface())
+	}
+	t.Logf("ExtraSigners correctly preserved in parquet: %v", extraSlice)
+
+	// Check that TxSigners is NOT present — this is the bug
+	txSignersField := parquetVal.FieldByName("TxSigners")
+	if txSignersField.IsValid() {
+		t.Logf("TxSigners field found in parquet output — bug may be fixed")
+	} else {
+		t.Errorf("SCHEMA DRIFT CONFIRMED: TransactionOutputParquet has no TxSigners field")
+		t.Errorf("TransactionOutput.TxSigners = %v (len=%d)", signers, len(signers))
+		t.Errorf("TransactionOutputParquet has %d fields but none named TxSigners", parquetType.NumField())
+		t.Errorf("ExtraSigners ([]string) IS mapped — so []string support exists in the parquet schema")
+		t.Errorf("Result: parquet export silently drops tx_signers data for every transaction")
+	}
+
+	// 4. Enumerate all parquet fields to show TxSigners is missing
+	fieldNames := make([]string, parquetType.NumField())
+	for i := 0; i < parquetType.NumField(); i++ {
+		fieldNames[i] = parquetType.Field(i).Name
+	}
+	hasTxSigners := false
+	for _, name := range fieldNames {
+		if name == "TxSigners" {
+			hasTxSigners = true
+			break
+		}
+	}
+	if !hasTxSigners {
+		t.Logf("BUG CONFIRMED: TxSigners not in parquet field list: %v", fieldNames)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestTransactionParquetDropsTxSigners
+    data_integrity_poc_test.go:289: JSON output contains tx_signers with 2 signers — correct
+    data_integrity_poc_test.go:305: ExtraSigners correctly preserved in parquet: [extra1]
+    data_integrity_poc_test.go:312: SCHEMA DRIFT CONFIRMED: TransactionOutputParquet has no TxSigners field
+    data_integrity_poc_test.go:313: TransactionOutput.TxSigners = [GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRST GXYZ234567ABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJK] (len=2)
+    data_integrity_poc_test.go:314: TransactionOutputParquet has 41 fields but none named TxSigners
+    data_integrity_poc_test.go:315: ExtraSigners ([]string) IS mapped — so []string support exists in the parquet schema
+    data_integrity_poc_test.go:316: Result: parquet export silently drops tx_signers data for every transaction
+    data_integrity_poc_test.go:332: BUG CONFIRMED: TxSigners not in parquet field list: [TransactionHash LedgerSequence Account AccountMuxed AccountSequence MaxFee FeeCharged OperationCount TxEnvelope TxResult TxMeta TxFeeMeta CreatedAt MemoType Memo TimeBounds Successful TransactionID FeeAccount FeeAccountMuxed InnerTransactionHash NewMaxFee LedgerBounds MinAccountSequence MinAccountSequenceAge MinAccountSequenceLedgerGap ExtraSigners ClosedAt ResourceFee SorobanResourcesInstructions SorobanResourcesReadBytes SorobanResourcesDiskReadBytes SorobanResourcesWriteBytes SorobanResourcesArchivedEntries TransactionResultCode InclusionFeeBid InclusionFeeCharged ResourceFeeRefund TotalNonRefundableResourceFeeCharged TotalRefundableResourceFeeCharged RentFeeCharged]
+--- FAIL: TestTransactionParquetDropsTxSigners (0.00s)
+FAIL
+```
