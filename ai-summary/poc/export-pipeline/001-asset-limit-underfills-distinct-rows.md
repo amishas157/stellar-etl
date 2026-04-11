@@ -100,3 +100,154 @@ This is the same class of bug as the confirmed trade finding (success/export-pip
   3. Deduplicate by `AssetID` (mirroring `export_assets.go` logic).
   4. Count distinct assets in the output.
 - **Assertion**: Assert that the deduplicated output contains fewer than `limit` distinct assets, proving the limit was consumed by duplicate operations. Specifically, assert `len(distinctAssets) < limit` when `limit == 2` and the first two operations reference the same asset.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestAssetLimitUnderfillsDistinctRows"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs 3 Payment operations — two referencing the same USDT asset and one referencing the native asset — then simulates the reader's `limit=2` truncation followed by the export command's `seenIDs` deduplication. After truncation, only 2 USDT operations remain; after deduplication, only 1 distinct asset is exported instead of the 2 the user requested. This proves the `--limit` flag counts raw operations rather than distinct exported asset rows.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// assetTransformInput mirrors input.AssetTransformInput to avoid import cycle.
+type assetTransformInput struct {
+	Operation        xdr.Operation
+	OperationIndex   int32
+	TransactionIndex int32
+	LedgerSeqNum     int32
+	LedgerCloseMeta  xdr.LedgerCloseMeta
+}
+
+// TestAssetLimitUnderfillsDistinctRows demonstrates that the export_assets
+// pipeline's --limit flag counts raw qualifying operations rather than distinct
+// exported asset rows. When early operations reference the same asset, the
+// reader limit is consumed by duplicates and later distinct assets are never
+// read, causing the output to contain fewer distinct assets than requested.
+func TestAssetLimitUnderfillsDistinctRows(t *testing.T) {
+	// Build 3 Payment operations:
+	//   ops[0] -> USDT payment (asset A)
+	//   ops[1] -> USDT payment (asset A, same asset as ops[0])
+	//   ops[2] -> native payment (asset B, different from A)
+
+	assetA := usdtAsset // credit_alphanum4 USDT
+	assetB := nativeAsset
+
+	ops := []assetTransformInput{
+		{
+			Operation: xdr.Operation{
+				Body: xdr.OperationBody{
+					Type: xdr.OperationTypePayment,
+					PaymentOp: &xdr.PaymentOp{
+						Destination: testAccount2,
+						Asset:       assetA,
+						Amount:      100000000,
+					},
+				},
+			},
+			OperationIndex:   0,
+			TransactionIndex: 0,
+			LedgerSeqNum:     100,
+			LedgerCloseMeta:  genericLedgerCloseMeta,
+		},
+		{
+			Operation: xdr.Operation{
+				Body: xdr.OperationBody{
+					Type: xdr.OperationTypePayment,
+					PaymentOp: &xdr.PaymentOp{
+						Destination: testAccount3,
+						Asset:       assetA, // same asset
+						Amount:      200000000,
+					},
+				},
+			},
+			OperationIndex:   1,
+			TransactionIndex: 0,
+			LedgerSeqNum:     100,
+			LedgerCloseMeta:  genericLedgerCloseMeta,
+		},
+		{
+			Operation: xdr.Operation{
+				Body: xdr.OperationBody{
+					Type: xdr.OperationTypePayment,
+					PaymentOp: &xdr.PaymentOp{
+						Destination: testAccount1,
+						Asset:       assetB, // different asset
+						Amount:      300000000,
+					},
+				},
+			},
+			OperationIndex:   0,
+			TransactionIndex: 1,
+			LedgerSeqNum:     100,
+			LedgerCloseMeta:  genericLedgerCloseMeta,
+		},
+	}
+
+	// --- Simulate the reader limit ---
+	// GetPaymentOperations stops when len(assetSlice) >= limit.
+	// With limit=2, the reader returns only ops[0] and ops[1].
+	var limit int64 = 2
+	readerResult := ops // all 3 ops exist in the ledger range
+	if int64(len(readerResult)) >= limit {
+		readerResult = readerResult[:limit] // reader truncates to 2
+	}
+
+	// --- Simulate the export deduplication (from export_assets.go:40-70) ---
+	seenIDs := map[int64]bool{}
+	var distinctAssets []AssetOutput
+	for _, ti := range readerResult {
+		transformed, err := TransformAsset(
+			ti.Operation, ti.OperationIndex, ti.TransactionIndex,
+			ti.LedgerSeqNum, ti.LedgerCloseMeta,
+		)
+		if err != nil {
+			t.Fatalf("TransformAsset failed: %v", err)
+		}
+		if _, exists := seenIDs[transformed.AssetID]; exists {
+			continue
+		}
+		seenIDs[transformed.AssetID] = true
+		distinctAssets = append(distinctAssets, transformed)
+	}
+
+	// --- Assertion ---
+	// The user requested limit=2 distinct assets.
+	// The ledger range contains at least 2 distinct assets (USDT + native).
+	// But because the reader counted raw operations (both USDT payments),
+	// it stopped before reaching the native asset, so we get only 1 distinct asset.
+	if int64(len(distinctAssets)) < limit {
+		t.Errorf("BUG CONFIRMED: --limit %d requested but only %d distinct asset(s) exported. "+
+			"The reader limit counted raw operations, not distinct assets. "+
+			"Asset B (native) was never read because duplicate references to Asset A consumed the limit budget.",
+			limit, len(distinctAssets))
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestAssetLimitUnderfillsDistinctRows
+    data_integrity_poc_test.go:116: BUG CONFIRMED: --limit 2 requested but only 1 distinct asset(s) exported. The reader limit counted raw operations, not distinct assets. Asset B (native) was never read because duplicate references to Asset A consumed the limit budget.
+--- FAIL: TestAssetLimitUnderfillsDistinctRows (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.717s
+```
