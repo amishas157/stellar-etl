@@ -78,6 +78,7 @@
 - `utilities/003-captive-core-flag-routes-to-history-archive.md` — High — `--captive-core` routes `export_ledgers` and `export_assets` through history-archive readers that omit `LedgerCloseMeta`, zeroing Soroban ledger fields and crashing asset export
 - `toid/001-contract-event-parquet-drops-operation-toid.md` — High — contract event Parquet conversion zeroes populated `operation_id` values
 - `toid/002-export-operations-stale-operation-parquet.md` — Medium — `export_operations --write-parquet` uploads the previous run's parquet file before regenerating current `transaction_id` and `id` TOIDs
+- `toid/003-export-transactions-stale-transaction-parquet.md` — Medium — `export_transactions --write-parquet` uploads a missing or stale parquet artifact before regenerating current transaction `id` TOIDs
 - `external-io/005-single-ledger-change-exports-produce-no-batches.md` — High — `StreamChanges` emits no batch at all for valid one-ledger ranges, so `export_ledger_entry_changes` can finish successfully with empty output
 - `external-io/006-effects-limit-counts-transactions-not-effects.md` — Medium — `export_effects --limit` counts transactions before emitted effect rows and can exceed the requested export bound
 - `external-io/007-trades-limit-counts-operations-not-trade-rows.md` — Medium — `export_trades --limit` counts trade-capable operations before emitted trade rows and can exceed the requested export bound
