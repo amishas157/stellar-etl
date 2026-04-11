@@ -56,7 +56,7 @@ Traced the complete path from `GetTransactionEvents()` in the upstream SDK throu
 
 ### Findings
 
-1. **V3 double-counting is confirmed and tested**: The test fixture creates identical event data in `SorobanMeta.Events` and `SorobanMeta.DiagnosticEvents`. `GetTransactionEvents()` returns both arrays unmodified. `TransformContractEvent()` processes both, producing 2 rows with differing `OperationID` for the same underlying event. This is exactly the pattern the SDK warns against.
+1. **V3 double-counting is confirmed and tested**: The test fixture creates identical event data in both `SorobanMeta.Events` and `SorobanMeta.DiagnosticEvents`. `GetTransactionEvents()` returns both arrays unmodified. `TransformContractEvent()` processes both, producing 2 rows with differing `OperationID` for the same underlying event. This is exactly the pattern the SDK warns against.
 
 2. **V4 overlap is plausible**: For V4 Soroban transactions, `DiagnosticEvents` may also mirror `Operations[i].Events` depending on node configuration. The ETL would produce duplicates in this case too. The V4 test fixture uses distinct event types across the three arrays, so V4 double-counting is not exercised by tests but is architecturally possible.
 
@@ -268,3 +268,31 @@ func TestContractEventDiagnosticDoubleCount(t *testing.T) {
 --- PASS: TestContractEventDiagnosticDoubleCount (0.00s)
 PASS
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-11
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Exercises claimed behavior**: PASS — the PoC and the repository's existing `contract_events_test.go` fixture both reproduce two exported rows when the same V3 Soroban event appears in `SorobanMeta.Events` and `SorobanMeta.DiagnosticEvents`.
+2. **Realistic preconditions**: PASS — upstream SDK/XDR code explicitly documents that diagnostic events may include contract events.
+3. **Bug vs by-design**: FAIL — `internal/transform/contract_events.go` explicitly states that the exporter intentionally joins transaction, operation, and diagnostic events into one `ContractEventOutput` stream "for better clarity to data analytics users," and the checked-in fixture already asserts the duplicate-row V3 behavior as expected output.
+4. **Impact vs severity**: NOT APPLICABLE — duplicate rows exist, but because the behavior is intentional the claimed High-severity corruption framing does not hold.
+5. **In scope**: PASS — if unintended, this would be an in-scope structural data issue.
+6. **Test correctness**: FAIL — the PoC proves that duplicate rows are emitted, but it does not prove the exporter promised a "unique underlying event" invariant. It passes against behavior the codebase already documents and tests as expected.
+7. **Alternative explanation**: FAIL — the observed rows are explained by the exporter intentionally materializing both the operation-event stream and the diagnostic-event stream. Nullable `operation_id` also provides partial provenance between the two rows.
+8. **Novelty**: PASS — no evidence this exact overlap claim was previously finalized.
+
+### Rejection Reason
+
+The PoC demonstrates documented, tested export semantics rather than unintended data corruption. This exporter intentionally flattens multiple upstream event streams into one history table, and duplicate V3 rows from overlapping contract/diagnostic metadata are already encoded as expected output in the repository fixture.
+
+### Failed Checks
+
+3, 6, 7
