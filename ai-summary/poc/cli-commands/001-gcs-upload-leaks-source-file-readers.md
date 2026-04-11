@@ -68,3 +68,108 @@ Traced `UploadTo` in `cmd/upload_to_gcs.go:25-73`. The function opens a local fi
 - **Steps**: Call `UploadTo` repeatedly (e.g., 50 times) with valid local files but invalid GCS credentials so the function opens `reader` and returns an error at the `storage.NewClient` step. Count open file descriptors before and after.
 - **Assertion**: Assert that the number of open file descriptors grows by at least the number of `UploadTo` calls, demonstrating the reader is never closed.
 - **Alternative simpler PoC**: Static analysis — confirm `reader` is assigned at line 32, search for `reader.Close()` in the function body, and assert it does not exist.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: cmd/upload_to_gcs_test.go
+**Test Name**: "TestUploadToLeaksFileDescriptors"
+**Test Language**: Go
+
+### Demonstration
+
+The test calls `GCS.UploadTo` 20 times with valid local files but invalid GCS credentials (forcing `storage.NewClient` to fail). Each call opens the local file via `os.Open` at line 32 of `upload_to_gcs.go` but returns an error at line 40 without ever closing the reader. By measuring the next available file descriptor number before and after the 20 calls, the test proves that exactly 20 FDs were leaked — one per `UploadTo` invocation — confirming the missing `reader.Close()`.
+
+### Test Body
+
+```go
+package cmd
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+)
+
+// nextAvailableFD returns the lowest available file descriptor number by opening
+// /dev/null, recording its FD, and immediately closing it. Since the OS assigns
+// the lowest unused FD, this serves as a proxy for how many FDs are open.
+func nextAvailableFD(t *testing.T) int {
+	t.Helper()
+	f, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("Cannot open %s: %v", os.DevNull, err)
+	}
+	fd := int(f.Fd())
+	f.Close()
+	return fd
+}
+
+// TestUploadToLeaksFileDescriptors demonstrates that GCS.UploadTo opens a local
+// file reader via os.Open but never closes it, leaking one file descriptor per
+// call. When storage.NewClient fails (e.g., invalid credentials), the function
+// returns an error without closing the reader opened at the top of the function.
+func TestUploadToLeaksFileDescriptors(t *testing.T) {
+	// Force storage.NewClient to fail by pointing to a nonexistent credentials file.
+	origCreds := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
+	os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "/nonexistent/invalid-credentials.json")
+	defer os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", origCreds)
+
+	dir := t.TempDir()
+	numFiles := 20
+
+	// Create temp files for UploadTo to open.
+	files := make([]string, numFiles)
+	for i := 0; i < numFiles; i++ {
+		f := filepath.Join(dir, fmt.Sprintf("upload-leak-test-%d.txt", i))
+		if err := os.WriteFile(f, []byte("test payload data"), 0644); err != nil {
+			t.Fatalf("Failed to create temp file: %v", err)
+		}
+		files[i] = f
+	}
+
+	// Stabilize FD count by forcing a GC + allowing finalizers to run.
+	runtime.GC()
+
+	beforeFD := nextAvailableFD(t)
+
+	g := &GCS{}
+	for _, f := range files {
+		err := g.UploadTo("", "fake-bucket", f)
+		// We expect UploadTo to fail (bad credentials), but the reader leak still occurs.
+		if err == nil {
+			t.Fatalf("Expected UploadTo to fail with invalid credentials, but it succeeded")
+		}
+	}
+
+	afterFD := nextAvailableFD(t)
+	leaked := afterFD - beforeFD
+
+	t.Logf("Next available FD before: %d, after: %d, leaked: %d (expected >= %d)", beforeFD, afterFD, leaked, numFiles)
+
+	// The bug: each UploadTo call opens a reader via os.Open but never closes it
+	// when storage.NewClient fails. The next available FD number should advance
+	// by at least numFiles because each leaked reader occupies one FD slot.
+	if leaked < numFiles {
+		t.Errorf("Expected at least %d leaked file descriptors, but only %d were leaked (before FD: %d, after FD: %d). "+
+			"The reader may have been closed — hypothesis not confirmed.",
+			numFiles, leaked, beforeFD, afterFD)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestUploadToLeaksFileDescriptors
+    upload_to_gcs_test.go:65: Next available FD before: 4, after: 24, leaked: 20 (expected >= 20)
+--- PASS: TestUploadToLeaksFileDescriptors (0.01s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/cmd	1.827s
+```
