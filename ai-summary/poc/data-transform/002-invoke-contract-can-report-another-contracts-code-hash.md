@@ -302,7 +302,7 @@ Two gaps remain:
 
 ---
 
-## PoC Attempt
+## PoC Attempt (Revision 2)
 
 **Result**: POC_PASS
 **Date**: 2026-04-11
@@ -313,7 +313,7 @@ Two gaps remain:
 
 ### Demonstration
 
-The test constructs a realistic `invoke_contract` transaction targeting contract A, with a footprint containing contract instance keys (`SCV_LEDGER_KEY_CONTRACT_INSTANCE`) for both contracts A and B plus their respective wasm code entries, where B's code appears before A's in the ReadOnly footprint. The transaction metadata (V3 with `SorobanMeta`) includes ledger-entry changes carrying both contracts' instance data — each `ScContractInstance` contains a `ContractExecutable` with its authoritative wasm hash. When `TransformOperation` is called, `contract_id` correctly resolves to contract A's address, but `contract_code_hash` returns contract B's hash (`bbbb...`) instead of A's (`aaaa...`). The test independently verifies that A's correct hash IS available in `transaction.UnsafeMeta.V3.Operations[0].Changes` via the contract instance entry, proving the transformer had an authoritative source for the correct hash but ignored it in favor of the footprint-scan helper.
+The revised test addresses both reviewer gaps by constructing a realistic `invoke_contract` transaction that includes: (1) contract instance keys in the Soroban footprint for both the invoked contract A and dependency contract B, matching real multi-contract call shapes; and (2) V3 transaction metadata carrying the authoritative `ContractDataEntry` instances for both contracts, where each contract's `ScContractInstance.Executable.WasmHash` provides the canonical mapping from contract identity to wasm hash. The test first verifies that contract A's authoritative hash (`aaaa...`) is extractable from the metadata the transformer receives, then calls `TransformOperation` and observes that `contract_code_hash` is set to B's hash (`bbbb...`) — proving that the transformer ignores the authoritative contract-instance-to-executable mapping available in the transaction metadata and instead returns the first `ContractCode` footprint key. This confirms the finding is data corruption (authoritative source existed and was ignored), not a by-design lossy summary.
 
 ### Test Body
 
@@ -330,15 +330,11 @@ import (
 // TestInvokeContractCodeHashMismatch demonstrates that when a Soroban
 // invoke_contract operation targets contract A but the transaction footprint
 // contains contract B's code entry before contract A's code entry,
-// the exported details pair contract A's address with contract B's code hash.
-//
-// The test also proves this is data corruption (not lossy-by-design) by
-// showing that the authoritative executable hash for contract A is available
-// in the transaction metadata's ledger-entry changes (the contract instance
-// entry carries the exact wasm hash), but the transformer ignores it and
-// instead uses a generic "first code key wins" footprint scan.
+// the exported details will pair contract A's address with contract B's code hash,
+// even though the transaction metadata carries the authoritative contract instance
+// entry that maps contract A to its correct wasm hash.
 func TestInvokeContractCodeHashMismatch(t *testing.T) {
-	// Two distinct wasm code hashes
+	// Define two distinct wasm code hashes
 	wasmHashA := xdr.Hash{0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
 		0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
 		0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
@@ -348,18 +344,15 @@ func TestInvokeContractCodeHashMismatch(t *testing.T) {
 		0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB,
 		0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB}
 
-	// Contract A is the invoked contract; contract B is a dependency
-	contractIdA := xdr.Hash{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+	// Contract A is the invoked contract; Contract B is a dependency
+	contractIdA := xdr.ContractId{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
 		0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
 		0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
 		0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20}
-	contractA := xdr.ContractId(contractIdA)
-
-	contractIdB := xdr.Hash{0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6, 0xF7, 0xF8,
-		0xF9, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF, 0x00,
-		0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-		0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10}
-	contractB := xdr.ContractId(contractIdB)
+	contractIdB := xdr.ContractId{0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF,
+		0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF,
+		0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF,
+		0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD, 0xBE, 0xEF}
 
 	// Build the invoke_contract operation targeting contract A
 	invokeOp := xdr.Operation{
@@ -372,7 +365,7 @@ func TestInvokeContractCodeHashMismatch(t *testing.T) {
 					InvokeContract: &xdr.InvokeContractArgs{
 						ContractAddress: xdr.ScAddress{
 							Type:       xdr.ScAddressTypeScAddressTypeContract,
-							ContractId: &contractA,
+							ContractId: &contractIdA,
 						},
 						FunctionName: "transfer",
 						Args:         []xdr.ScVal{},
@@ -382,45 +375,49 @@ func TestInvokeContractCodeHashMismatch(t *testing.T) {
 		},
 	}
 
-	// Realistic footprint: includes contract instance keys for both contracts
-	// and their wasm code keys. Contract B's code hash appears FIRST in ReadOnly.
+	// Build a realistic footprint with contract instance keys AND code keys
+	// for both contracts. Contract B's code key appears FIRST in ReadOnly.
 	footprint := xdr.LedgerFootprint{
 		ReadOnly: []xdr.LedgerKey{
-			// Contract B's wasm code entry appears FIRST — the buggy helper picks this
+			// Contract B's code entry appears first — the buggy helper will pick this
 			{
 				Type: xdr.LedgerEntryTypeContractCode,
 				ContractCode: &xdr.LedgerKeyContractCode{
 					Hash: wasmHashB,
 				},
 			},
-			// Contract B's instance key
+			// Contract B's instance entry (realistic: dependency contract)
 			{
 				Type: xdr.LedgerEntryTypeContractData,
 				ContractData: &xdr.LedgerKeyContractData{
 					Contract: xdr.ScAddress{
 						Type:       xdr.ScAddressTypeScAddressTypeContract,
-						ContractId: &contractB,
+						ContractId: &contractIdB,
 					},
-					Key:        xdr.ScVal{Type: xdr.ScValTypeScvLedgerKeyContractInstance},
+					Key: xdr.ScVal{
+						Type: xdr.ScValTypeScvLedgerKeyContractInstance,
+					},
 					Durability: xdr.ContractDataDurabilityPersistent,
 				},
 			},
-			// Contract A's wasm code entry appears SECOND
+			// Contract A's code entry appears second
 			{
 				Type: xdr.LedgerEntryTypeContractCode,
 				ContractCode: &xdr.LedgerKeyContractCode{
 					Hash: wasmHashA,
 				},
 			},
-			// Contract A's instance key (the invoked contract)
+			// Contract A's instance entry (the invoked contract)
 			{
 				Type: xdr.LedgerEntryTypeContractData,
 				ContractData: &xdr.LedgerKeyContractData{
 					Contract: xdr.ScAddress{
 						Type:       xdr.ScAddressTypeScAddressTypeContract,
-						ContractId: &contractA,
+						ContractId: &contractIdA,
 					},
-					Key:        xdr.ScVal{Type: xdr.ScValTypeScvLedgerKeyContractInstance},
+					Key: xdr.ScVal{
+						Type: xdr.ScValTypeScvLedgerKeyContractInstance,
+					},
 					Durability: xdr.ContractDataDurabilityPersistent,
 				},
 			},
@@ -448,79 +445,6 @@ func TestInvokeContractCodeHashMismatch(t *testing.T) {
 		},
 	}
 
-	// Build V3 transaction metadata with ledger-entry changes that carry
-	// the contract instances for both contracts. This proves the authoritative
-	// executable hash for contract A is available at transform time.
-	contractAInstanceChange := xdr.LedgerEntryChange{
-		Type: xdr.LedgerEntryChangeTypeLedgerEntryState,
-		State: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 100,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeContractData,
-				ContractData: &xdr.ContractDataEntry{
-					Contract: xdr.ScAddress{
-						Type:       xdr.ScAddressTypeScAddressTypeContract,
-						ContractId: &contractA,
-					},
-					Key:        xdr.ScVal{Type: xdr.ScValTypeScvLedgerKeyContractInstance},
-					Durability: xdr.ContractDataDurabilityPersistent,
-					Val: xdr.ScVal{
-						Type: xdr.ScValTypeScvContractInstance,
-						Instance: &xdr.ScContractInstance{
-							Executable: xdr.ContractExecutable{
-								Type:     xdr.ContractExecutableTypeContractExecutableWasm,
-								WasmHash: &wasmHashA, // A's authoritative wasm hash
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	contractBInstanceChange := xdr.LedgerEntryChange{
-		Type: xdr.LedgerEntryChangeTypeLedgerEntryState,
-		State: &xdr.LedgerEntry{
-			LastModifiedLedgerSeq: 100,
-			Data: xdr.LedgerEntryData{
-				Type: xdr.LedgerEntryTypeContractData,
-				ContractData: &xdr.ContractDataEntry{
-					Contract: xdr.ScAddress{
-						Type:       xdr.ScAddressTypeScAddressTypeContract,
-						ContractId: &contractB,
-					},
-					Key:        xdr.ScVal{Type: xdr.ScValTypeScvLedgerKeyContractInstance},
-					Durability: xdr.ContractDataDurabilityPersistent,
-					Val: xdr.ScVal{
-						Type: xdr.ScValTypeScvContractInstance,
-						Instance: &xdr.ScContractInstance{
-							Executable: xdr.ContractExecutable{
-								Type:     xdr.ContractExecutableTypeContractExecutableWasm,
-								WasmHash: &wasmHashB,
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	txMetaV3 := xdr.TransactionMetaV3{
-		TxChangesBefore: xdr.LedgerEntryChanges{},
-		Operations: []xdr.OperationMeta{
-			{
-				Changes: xdr.LedgerEntryChanges{
-					contractBInstanceChange,
-					contractAInstanceChange,
-				},
-			},
-		},
-		TxChangesAfter: xdr.LedgerEntryChanges{},
-		SorobanMeta: &xdr.SorobanTransactionMeta{
-			ReturnValue: xdr.ScVal{Type: xdr.ScValTypeScvVoid},
-		},
-	}
-
 	results := []xdr.OperationResult{
 		{
 			Code: xdr.OperationResultCodeOpInner,
@@ -533,7 +457,81 @@ func TestInvokeContractCodeHashMismatch(t *testing.T) {
 		},
 	}
 
-	resultMeta := createResultMeta(results)
+	// Build transaction metadata (V3 for Soroban) that carries the
+	// authoritative contract instance entries mapping each contract to its
+	// executable wasm hash. This is the data the transformer has available
+	// but ignores when populating contract_code_hash.
+	txMeta := xdr.TransactionMeta{
+		V: 3,
+		V3: &xdr.TransactionMetaV3{
+			TxChangesBefore: xdr.LedgerEntryChanges{},
+			Operations: []xdr.OperationMeta{
+				{
+					Changes: xdr.LedgerEntryChanges{
+						// Contract A's instance entry: maps contract A → wasm hash A
+						{
+							Type: xdr.LedgerEntryChangeTypeLedgerEntryState,
+							State: &xdr.LedgerEntry{
+								LastModifiedLedgerSeq: 100,
+								Data: xdr.LedgerEntryData{
+									Type: xdr.LedgerEntryTypeContractData,
+									ContractData: &xdr.ContractDataEntry{
+										Contract: xdr.ScAddress{
+											Type:       xdr.ScAddressTypeScAddressTypeContract,
+											ContractId: &contractIdA,
+										},
+										Key: xdr.ScVal{
+											Type: xdr.ScValTypeScvLedgerKeyContractInstance,
+										},
+										Durability: xdr.ContractDataDurabilityPersistent,
+										Val: xdr.ScVal{
+											Type: xdr.ScValTypeScvContractInstance,
+											Instance: &xdr.ScContractInstance{
+												Executable: xdr.ContractExecutable{
+													Type:     xdr.ContractExecutableTypeContractExecutableWasm,
+													WasmHash: &wasmHashA,
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+						// Contract B's instance entry: maps contract B → wasm hash B
+						{
+							Type: xdr.LedgerEntryChangeTypeLedgerEntryState,
+							State: &xdr.LedgerEntry{
+								LastModifiedLedgerSeq: 100,
+								Data: xdr.LedgerEntryData{
+									Type: xdr.LedgerEntryTypeContractData,
+									ContractData: &xdr.ContractDataEntry{
+										Contract: xdr.ScAddress{
+											Type:       xdr.ScAddressTypeScAddressTypeContract,
+											ContractId: &contractIdB,
+										},
+										Key: xdr.ScVal{
+											Type: xdr.ScValTypeScvLedgerKeyContractInstance,
+										},
+										Durability: xdr.ContractDataDurabilityPersistent,
+										Val: xdr.ScVal{
+											Type: xdr.ScValTypeScvContractInstance,
+											Instance: &xdr.ScContractInstance{
+												Executable: xdr.ContractExecutable{
+													Type:     xdr.ContractExecutableTypeContractExecutableWasm,
+													WasmHash: &wasmHashB,
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			TxChangesAfter: xdr.LedgerEntryChanges{},
+		},
+	}
 
 	tx := ingest.LedgerTransaction{
 		Index: 1,
@@ -541,12 +539,41 @@ func TestInvokeContractCodeHashMismatch(t *testing.T) {
 			Type: xdr.EnvelopeTypeEnvelopeTypeTx,
 			V1:   &envelope,
 		},
-		Result: resultMeta,
-		UnsafeMeta: xdr.TransactionMeta{
-			V:  3,
-			V3: &txMetaV3,
-		},
+		Result:     genericLedgerTransaction.Result,
+		UnsafeMeta: txMeta,
 	}
+	tx.Result.Result.Result.Results = &results
+
+	// Verify the authoritative source is present: extract contract A's
+	// executable hash from the metadata to prove the transformer had it.
+	var authoritativeHashA string
+	for _, opMeta := range tx.UnsafeMeta.V3.Operations {
+		for _, change := range opMeta.Changes {
+			if change.Type != xdr.LedgerEntryChangeTypeLedgerEntryState {
+				continue
+			}
+			entry := change.State
+			if entry.Data.Type != xdr.LedgerEntryTypeContractData {
+				continue
+			}
+			cd := entry.Data.ContractData
+			if cd.Key.Type != xdr.ScValTypeScvLedgerKeyContractInstance {
+				continue
+			}
+			if cd.Contract.Type == xdr.ScAddressTypeScAddressTypeContract &&
+				*cd.Contract.ContractId == contractIdA {
+				if cd.Val.Type == xdr.ScValTypeScvContractInstance &&
+					cd.Val.Instance != nil &&
+					cd.Val.Instance.Executable.Type == xdr.ContractExecutableTypeContractExecutableWasm {
+					authoritativeHashA = cd.Val.Instance.Executable.WasmHash.HexString()
+				}
+			}
+		}
+	}
+	if authoritativeHashA == "" {
+		t.Fatal("Test setup error: could not find contract A's authoritative hash in metadata")
+	}
+	t.Logf("Authoritative hash for contract A from metadata: %s", authoritativeHashA)
 
 	ledgerCloseMeta := makeLedgerCloseMeta()
 
@@ -571,71 +598,32 @@ func TestInvokeContractCodeHashMismatch(t *testing.T) {
 	expectedCodeHashA := wasmHashA.HexString()
 	expectedCodeHashB := wasmHashB.HexString()
 
-	t.Logf("contract_id:        %s", contractId)
-	t.Logf("contract_code_hash: %s", codeHash)
-	t.Logf("expected hash A:    %s (invoked contract)", expectedCodeHashA)
-	t.Logf("expected hash B:    %s (dependency contract)", expectedCodeHashB)
+	t.Logf("contract_id:                   %s", contractId)
+	t.Logf("contract_code_hash (exported):  %s", codeHash)
+	t.Logf("expected hash A (authoritative): %s", expectedCodeHashA)
+	t.Logf("expected hash B (dependency):    %s", expectedCodeHashB)
 
-	// Verify the authoritative hash for contract A IS available in the metadata
-	authoritativeHashFound := false
-	for _, change := range txMetaV3.Operations[0].Changes {
-		if change.Type != xdr.LedgerEntryChangeTypeLedgerEntryState {
-			continue
-		}
-		entry := change.State
-		if entry.Data.Type != xdr.LedgerEntryTypeContractData {
-			continue
-		}
-		cd := entry.Data.ContractData
-		if cd.Key.Type != xdr.ScValTypeScvLedgerKeyContractInstance {
-			continue
-		}
-		cid, ok := cd.Contract.GetContractId()
-		if !ok {
-			continue
-		}
-		if xdr.Hash(cid) == contractIdA {
-			instance := cd.Val.MustInstance()
-			if instance.Executable.Type == xdr.ContractExecutableTypeContractExecutableWasm {
-				metaHash := instance.Executable.MustWasmHash().HexString()
-				t.Logf("AUTHORITATIVE: contract A's wasm hash from metadata: %s", metaHash)
-				if metaHash == expectedCodeHashA {
-					authoritativeHashFound = true
-				}
-			}
-		}
-	}
-	if !authoritativeHashFound {
-		t.Fatal("TEST SETUP ERROR: could not find contract A's authoritative wasm hash in metadata")
+	// The authoritative hash from metadata must match hash A
+	if authoritativeHashA != expectedCodeHashA {
+		t.Fatalf("Test setup error: authoritative hash mismatch")
 	}
 
-	// BUG DEMONSTRATION: contract_code_hash is B's hash, not A's hash.
-	// The transformer had A's authoritative hash available in the metadata
-	// (proven above) but ignored it, using the footprint-scan helper instead.
+	// BUG DEMONSTRATION: The exported contract_code_hash is B's hash,
+	// not A's. The authoritative mapping (contract A → wasm hash A) was
+	// available in the transaction metadata, but contractCodeHashFromTxEnvelope
+	// ignores it and returns the first ContractCode key from the footprint.
 	if codeHash == expectedCodeHashB {
 		t.Errorf("DATA CORRUPTION: contract_code_hash is contract B's hash (%s), "+
-			"but contract_id corresponds to contract A. "+
-			"The authoritative wasm hash for A (%s) was available in the "+
-			"transaction metadata's ledger-entry changes, but the transformer "+
-			"used the footprint-scan helper which returns the first code key.",
-			expectedCodeHashB, expectedCodeHashA)
+			"but contract_id corresponds to contract A whose authoritative "+
+			"wasm hash (%s) is available in the transaction metadata. "+
+			"The helper returned the first footprint code entry instead of "+
+			"consulting the contract instance entries.", expectedCodeHashB, expectedCodeHashA)
 	}
 
 	if codeHash != expectedCodeHashA {
-		t.Logf("CONFIRMED: contract_code_hash (%s) does NOT match invoked contract A's hash (%s)",
+		t.Logf("CONFIRMED: exported contract_code_hash (%s) does NOT match "+
+			"the invoked contract A's authoritative hash (%s) from metadata",
 			codeHash, expectedCodeHashA)
-	}
-}
-
-// createResultMeta builds a TransactionResultPair with the given operation results.
-func createResultMeta(results []xdr.OperationResult) xdr.TransactionResultPair {
-	return xdr.TransactionResultPair{
-		Result: xdr.TransactionResult{
-			Result: xdr.TransactionResultResult{
-				Code:    xdr.TransactionResultCodeTxSuccess,
-				Results: &results,
-			},
-		},
 	}
 }
 ```
@@ -644,26 +632,14 @@ func createResultMeta(results []xdr.OperationResult) xdr.TransactionResultPair {
 
 ```
 === RUN   TestInvokeContractCodeHashMismatch
-    data_integrity_poc_test.go:254: contract_id:        CAAQEAYEAUDAOCAJBIFQYDIOB4IBCEQTCQKRMFYYDENBWHA5DYPSBFLM
-    data_integrity_poc_test.go:255: contract_code_hash: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-    data_integrity_poc_test.go:256: expected hash A:    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (invoked contract)
-    data_integrity_poc_test.go:257: expected hash B:    bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb (dependency contract)
-    data_integrity_poc_test.go:281: AUTHORITATIVE: contract A's wasm hash from metadata: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-    data_integrity_poc_test.go:296: DATA CORRUPTION: contract_code_hash is contract B's hash (bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb), but contract_id corresponds to contract A. The authoritative wasm hash for A (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) was available in the transaction metadata's ledger-entry changes, but the transformer used the footprint-scan helper which returns the first code key.
-    data_integrity_poc_test.go:305: CONFIRMED: contract_code_hash (bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) does NOT match invoked contract A's hash (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)
+    data_integrity_poc_test.go:256: Authoritative hash for contract A from metadata: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    data_integrity_poc_test.go:281: contract_id:                   CAAQEAYEAUDAOCAJBIFQYDIOB4IBCEQTCQKRMFYYDENBWHA5DYPSBFLM
+    data_integrity_poc_test.go:282: contract_code_hash (exported):  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    data_integrity_poc_test.go:283: expected hash A (authoritative): aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    data_integrity_poc_test.go:284: expected hash B (dependency):    bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    data_integrity_poc_test.go:296: DATA CORRUPTION: contract_code_hash is contract B's hash (bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb), but contract_id corresponds to contract A whose authoritative wasm hash (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) is available in the transaction metadata. The helper returned the first footprint code entry instead of consulting the contract instance entries.
+    data_integrity_poc_test.go:304: CONFIRMED: exported contract_code_hash (bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) does NOT match the invoked contract A's authoritative hash (aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) from metadata
 --- FAIL: TestInvokeContractCodeHashMismatch (0.00s)
 FAIL
-FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.802s
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.906s
 ```
-
-### Authoritative Source Analysis
-
-The test proves the mismatch is data corruption rather than a lossy-by-design convenience value:
-
-1. **Realistic fixture**: The footprint includes contract instance keys (`SCV_LEDGER_KEY_CONTRACT_INSTANCE`) for both contracts A and B alongside their wasm code entries, modeling a real cross-contract invocation where the invoked contract calls a dependency.
-
-2. **Authoritative hash available at transform time**: The transaction metadata (`transaction.UnsafeMeta.V3.Operations[0].Changes`) carries `LedgerEntryChange` entries of type `State` for both contracts' instance data. Each `ContractDataEntry.Val` is an `ScVal` of type `ScvContractInstance` containing an `ScContractInstance` with `Executable.WasmHash` — the canonical on-chain binding between a contract identity and its code. The test independently reads contract A's instance from this metadata and confirms its wasm hash is `aaaa...`.
-
-3. **Transformer ignores the authoritative source**: `extractOperationDetails` passes `transaction` to `contractCodeHashFromTxEnvelope()`, which only inspects `transaction.Envelope` (the footprint), never `transaction.UnsafeMeta` (the metadata). The contract instance data in the metadata — which definitively maps each contract address to its executable hash — is completely unused.
-
-4. **The correct fix path**: For `invoke_contract`, the transformer already knows the invoked contract's address from `InvokeContractArgs.ContractAddress`. It could look up that contract's instance entry in the metadata's ledger-entry changes, extract the `ScContractInstance.Executable.WasmHash`, and use that as `contract_code_hash` — guaranteeing the hash matches the invoked contract.
