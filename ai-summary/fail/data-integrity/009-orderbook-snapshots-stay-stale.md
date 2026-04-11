@@ -40,11 +40,11 @@ If no offers change during the requested range, the bug is invisible because the
 **Severity**: High
 **Date**: 2026-04-10
 **Reviewed by**: claude-opus-4-6, high
-**Novelty**: PASS — not previously investigated
+**Novelty**: PASS - not previously investigated
 
 ### Trace Summary
 
-`UpdateOrderbook` at line 195 takes `orderbook []ingest.Change` by value. It compacts the existing orderbook with new ledger changes via `GetOfferChanges` and `changeCache.AddChange`, then reassigns `orderbook = changeCache.GetChanges()` at line 208. This reassignment only updates the function-local slice header — Go passes slice headers (pointer, length, capacity) by value. The caller's `startOrderbook` variable in both `exportOrderbookBatch` (line 177) and `StreamOrderbooks` (line 215) is never modified. Subsequent iterations in `exportOrderbookBatch` copy the unchanged `startOrderbook` into the batch map, producing stale snapshots for every ledger after the first.
+`UpdateOrderbook` at line 195 takes `orderbook []ingest.Change` by value. It compacts the existing orderbook with new ledger changes via `GetOfferChanges` and `changeCache.AddChange`, then reassigns `orderbook = changeCache.GetChanges()` at line 208. This reassignment only updates the function-local slice header - Go passes slice headers (pointer, length, capacity) by value. The caller's `startOrderbook` variable in both `exportOrderbookBatch` (line 177) and `StreamOrderbooks` (line 215) is never modified. Subsequent iterations in `exportOrderbookBatch` copy the unchanged `startOrderbook` into the batch map, producing stale snapshots for every ledger after the first.
 
 ### Code Paths Examined
 
@@ -70,7 +70,7 @@ This is a textbook Go value-semantics bug (Investigation Pattern 4). The functio
   1. Creating a `[]ingest.Change` slice with known content
   2. Passing it to a function that mimics `UpdateOrderbook`'s reassignment pattern
   3. Asserting the caller's variable is unchanged after the call
-- **Steps**: 
+- **Steps**:
   1. Create `original := []ingest.Change{...}` with one offer entry
   2. Call a wrapper that does `param = newSlice` (mimicking line 208)
   3. Assert `len(original)` and content are unchanged — proving the update was lost
@@ -204,3 +204,34 @@ func simulateUpdateOrderbook(orderbook []ingest.Change, newChanges ...ingest.Cha
 PASS
 ok  	github.com/stellar/stellar-etl/v2/internal/input	0.667s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-10
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Does the PoC actually exercise the claimed issue?** No. The PoC compiles and passes, but it only calls `simulateUpdateOrderbook`, a helper defined inside the test body. It never calls `UpdateOrderbook`, `exportOrderbookBatch`, or `StreamOrderbooks`, so it does not reproduce the claimed production-path corruption.
+2. **Are the preconditions realistic?** No current in-repo caller reaches this path. Repository search found `StreamOrderbooks()` and `ReceiveParsedOrderbooks()` only inside `internal/input/orderbooks.go`, and the README command surface lists no orderbook export command.
+3. **Is the behavior a bug or by design?** The local slice reassignment is a real bug pattern if this code is ever wired, but that does not establish a current shipped data-integrity issue.
+4. **Does the impact match the claimed severity?** Not reached. If an active exporter used this path, stale snapshots would likely be High severity, but the present review cannot assign shipped impact because the path is dormant.
+5. **Is the finding in scope?** No. The repository does not show a concrete active JSON/Parquet export path that invokes this orderbook pipeline today, so this fails the requirement for a concrete wrong-output path in the current product.
+6. **Is the test itself correct?** No. The test proves generic Go slice semantics, not the ETL pipeline behavior. It can pass even if the production flow is never invoked.
+7. **Can the results be explained without the claimed issue?** Yes. The observed passing output is fully explained by the synthetic helper's by-value slice reassignment, without demonstrating any result from the actual exporter.
+8. **Is this finding novel?** Not material to the verdict.
+
+### Rejection Reason
+
+The PoC does not exercise the production code path, and I could not find any current command or other in-repo caller that wires `StreamOrderbooks()` / `UpdateOrderbook()` into an active export surface. That makes the hypothesis an unwired dormant-path bug rather than a confirmed in-scope data-corruption issue in shipped behavior.
+
+### Failed Checks
+
+- 1
+- 2
+- 5
+- 6
