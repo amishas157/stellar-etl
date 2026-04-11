@@ -88,3 +88,4 @@
 - `data-integrity/012-native-sac-balance-rows-bypass-lumens-guard.md` — High — native SAC balance rows populate unsupported `soroban_contract_data.balance_*` fields instead of being rejected like lumens rows in the upstream SAC parser
 - `data-integrity/013-temporary-contract-balances-exported-as-persistent-sac-balances.md` — High — temporary contract-data rows populate SAC `balance_holder` and `balance` fields despite non-persistent durability
 - `data-transform/023-ledger-transaction-drops-post-tx-apply-fee-xdr.md` — High — `ledger_transaction` export drops protocol-23+ `PostTxApplyFeeChanges` from all raw blobs
+- `external-io/009-token-transfer-amount-float64-rounding.md` — Critical — token-transfer export rounds large raw amounts through `float64` and can collapse distinct on-chain values into the same JSON `amount`
