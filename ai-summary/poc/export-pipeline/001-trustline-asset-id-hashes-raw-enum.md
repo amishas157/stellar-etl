@@ -84,3 +84,106 @@ The fix is trivial: change `asset.Type.String()` to `assetType` on line 57 of `t
 - **Setup**: Create a `TrustLineEntry` for a `credit_alphanum4` asset with known code/issuer. Also create the same asset as an `xdr.Asset` and call `transformSingleAsset()` on it.
 - **Steps**: Call `TransformTrustline()` on the trustline change, and `transformSingleAsset()` on the equivalent `xdr.Asset`. Compare the `AssetID` fields from both outputs.
 - **Assertion**: Assert `trustlineOutput.AssetID == assetOutput.AssetID`. Currently this will FAIL because the trustline hashes `"AssetTypeAssetTypeCreditAlphanum4"` while the asset hashes `"credit_alphanum4"`. Alternatively, compute `FarmHashAsset(code, issuer, "credit_alphanum4")` directly and assert it equals `trustlineOutput.AssetID`.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestTrustlineAssetIDHashesRawEnumInsteadOfCanonicalType"
+**Test Language**: Go
+
+### Demonstration
+
+The test creates a `credit_alphanum4` trustline (ETH asset), transforms it via `TransformTrustline()`, and compares the resulting `AssetID` against the canonical `FarmHashAsset("ETH", issuer, "credit_alphanum4")` that all other export tables use. The assertion fails because the trustline hashes `"AssetTypeAssetTypeCreditAlphanum4"` (raw enum name via `asset.Type.String()`) instead of `"credit_alphanum4"` (canonical type), producing `asset_id = -2311386320395871674` instead of `4476940172956910889`. This proves cross-table joins on `asset_id` involving trustlines will silently return zero rows.
+
+### Test Body
+
+```go
+func TestTrustlineAssetIDHashesRawEnumInsteadOfCanonicalType(t *testing.T) {
+	// 1. Create a credit_alphanum4 trustline and transform it
+	trustlineChange := ingest.Change{
+		ChangeType: xdr.LedgerEntryChangeTypeLedgerEntryCreated,
+		Type:       xdr.LedgerEntryTypeTrustline,
+		Pre:        nil,
+		Post: &xdr.LedgerEntry{
+			LastModifiedLedgerSeq: 100,
+			Data: xdr.LedgerEntryData{
+				Type: xdr.LedgerEntryTypeTrustline,
+				TrustLine: &xdr.TrustLineEntry{
+					AccountId: testAccount1ID,
+					Asset:     ethTrustLineAsset,
+					Balance:   1000000,
+					Limit:     9000000000000000000,
+					Flags:     xdr.Uint32(xdr.TrustLineFlagsAuthorizedFlag),
+					Ext: xdr.TrustLineEntryExt{
+						V: 1,
+						V1: &xdr.TrustLineEntryV1{
+							Liabilities: xdr.Liabilities{
+								Buying:  0,
+								Selling: 0,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	header := xdr.LedgerHeaderHistoryEntry{
+		Header: xdr.LedgerHeader{
+			ScpValue: xdr.StellarValue{CloseTime: 1000},
+			LedgerSeq: 10,
+		},
+	}
+
+	trustlineOutput, err := TransformTrustline(trustlineChange, header)
+	if err != nil {
+		t.Fatalf("TransformTrustline failed: %v", err)
+	}
+
+	// 2. Compute the canonical asset_id using the same code/issuer/type that
+	//    transformSingleAsset (used by offers, claimable_balances, etc.) would use.
+	//    The canonical type string for credit_alphanum4 is "credit_alphanum4".
+	canonicalAssetID := FarmHashAsset("ETH", testAccount3Address, "credit_alphanum4")
+
+	// 3. Verify the trustline row exports "credit_alphanum4" as its asset_type
+	if trustlineOutput.AssetType != "credit_alphanum4" {
+		t.Fatalf("Unexpected AssetType: got %q, want %q", trustlineOutput.AssetType, "credit_alphanum4")
+	}
+
+	// 4. The key assertion: trustline's asset_id should match the canonical hash.
+	//    This FAILS because trustline.go hashes asset.Type.String()
+	//    ("AssetTypeAssetTypeCreditAlphanum4") instead of "credit_alphanum4".
+	if trustlineOutput.AssetID != canonicalAssetID {
+		t.Errorf("Trustline asset_id is inconsistent with canonical hash.\n"+
+			"  Trustline AssetID:  %d (hashed from raw enum %q)\n"+
+			"  Canonical AssetID:  %d (hashed from canonical type %q)\n"+
+			"  Trustline exports AssetType=%q but hashes a different string for asset_id.\n"+
+			"  This breaks cross-table joins on asset_id.",
+			trustlineOutput.AssetID,
+			xdr.AssetTypeAssetTypeCreditAlphanum4.String(),
+			canonicalAssetID,
+			"credit_alphanum4",
+			trustlineOutput.AssetType,
+		)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestTrustlineAssetIDHashesRawEnumInsteadOfCanonicalType
+    data_integrity_poc_test.go:71: Trustline asset_id is inconsistent with canonical hash.
+          Trustline AssetID:  -2311386320395871674 (hashed from raw enum "AssetTypeAssetTypeCreditAlphanum4")
+          Canonical AssetID:  4476940172956910889 (hashed from canonical type "credit_alphanum4")
+          Trustline exports AssetType="credit_alphanum4" but hashes a different string for asset_id.
+          This breaks cross-table joins on asset_id.
+--- FAIL: TestTrustlineAssetIDHashesRawEnumInsteadOfCanonicalType (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.765s
+```
