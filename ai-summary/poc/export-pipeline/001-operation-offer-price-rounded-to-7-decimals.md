@@ -78,3 +78,190 @@ Traced the full code path from `extractOperationDetails()` through `addPriceDeta
 - **Setup**: Create a `ManageSellOfferOp` with `Price: xdr.Price{N: 1, D: 2147483647}` wrapped in the standard `OperationTransformInput` fixture. Use an existing offer operation test as a template.
 - **Steps**: Call `TransformOperation()` with the crafted input. Extract `details["price"]` from the result.
 - **Assertion**: Assert that `details["price"].(float64) != 0` — currently this will FAIL because the price rounds to zero. Also verify `details["price_r"]` preserves `{N: 1, D: 2147483647}` correctly (this should pass, confirming the anti-evidence).
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestOfferPriceRoundedToZero"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `ManageSellOffer` operation with `Price{N:1, D:2147483647}` (≈ 4.66e-10) and runs it through the full `TransformOperation()` production code path. The output `details["price"]` is `0` instead of the expected non-zero value, confirming silent data corruption. A second assertion at the boundary value `Price{N:1, D:20000001}` (≈ 5e-8) also produces `0`, while `details["price_r"]` correctly preserves the exact numerator/denominator, confirming the anti-evidence that the rational representation is intact but the float field is wrong.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"math"
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/ingest"
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestOfferPriceRoundedToZero demonstrates that addPriceDetails truncates
+// very small but valid xdr.Price values to 0 because xdr.Price.String()
+// uses FloatString(7), which rounds any N/D < ~5e-8 to "0.0000000".
+func TestOfferPriceRoundedToZero(t *testing.T) {
+	sourceAccount, _ := xdr.NewMuxedAccount(
+		xdr.CryptoKeyTypeKeyTypeEd25519, xdr.Uint256([32]byte{}),
+	)
+
+	smallPrice := xdr.Price{N: 1, D: 2147483647} // ≈ 4.66e-10
+
+	sellOp := xdr.Operation{
+		SourceAccount: &sourceAccount,
+		Body: xdr.OperationBody{
+			Type: xdr.OperationTypeManageSellOffer,
+			ManageSellOfferOp: &xdr.ManageSellOfferOp{
+				Selling: xdr.Asset{Type: xdr.AssetTypeAssetTypeNative},
+				Buying:  xdr.Asset{Type: xdr.AssetTypeAssetTypeNative},
+				Amount:  1000000,
+				Price:   smallPrice,
+				OfferId: 0,
+			},
+		},
+	}
+
+	envelope := xdr.TransactionV1Envelope{
+		Tx: xdr.Transaction{
+			SourceAccount: sourceAccount,
+			Memo:          xdr.Memo{Type: xdr.MemoTypeMemoNone},
+			Operations:    []xdr.Operation{sellOp},
+			Ext: xdr.TransactionExt{
+				V: 0,
+				SorobanData: &xdr.SorobanTransactionData{
+					Ext:       xdr.SorobanTransactionDataExt{V: 0},
+					Resources: xdr.SorobanResources{Footprint: xdr.LedgerFootprint{}},
+				},
+			},
+		},
+	}
+
+	tx := ingest.LedgerTransaction{
+		Index: 1,
+		Envelope: xdr.TransactionEnvelope{
+			Type: xdr.EnvelopeTypeEnvelopeTypeTx,
+			V1:   &envelope,
+		},
+		Result: xdr.TransactionResultPair{
+			Result: xdr.TransactionResult{
+				FeeCharged: 100,
+				Result: xdr.TransactionResultResult{
+					Code: xdr.TransactionResultCodeTxSuccess,
+					Results: &[]xdr.OperationResult{
+						{
+							Code: xdr.OperationResultCodeOpInner,
+							Tr: &xdr.OperationResultTr{
+								Type: xdr.OperationTypeManageSellOffer,
+								ManageSellOfferResult: &xdr.ManageSellOfferResult{
+									Code: xdr.ManageSellOfferResultCodeManageSellOfferSuccess,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		UnsafeMeta: xdr.TransactionMeta{
+			V: 1,
+			V1: &xdr.TransactionMetaV1{
+				Operations: []xdr.OperationMeta{
+					{Changes: xdr.LedgerEntryChanges{}},
+				},
+			},
+		},
+	}
+
+	lcm := xdr.LedgerCloseMeta{
+		V: 0,
+		V0: &xdr.LedgerCloseMetaV0{
+			LedgerHeader: xdr.LedgerHeaderHistoryEntry{
+				Header: xdr.LedgerHeader{
+					ScpValue: xdr.StellarValue{CloseTime: 0},
+				},
+			},
+		},
+	}
+
+	output, err := TransformOperation(sellOp, 0, tx, 1, lcm, "")
+	if err != nil {
+		t.Fatalf("TransformOperation failed: %v", err)
+	}
+
+	priceVal, ok := output.OperationDetails["price"]
+	if !ok {
+		t.Fatal("details[\"price\"] missing from output")
+	}
+
+	priceFloat, ok := priceVal.(float64)
+	if !ok {
+		t.Fatalf("details[\"price\"] is not float64: %T", priceVal)
+	}
+
+	expectedPrice := float64(1) / float64(2147483647)
+	// The bug: addPriceDetails uses price.String() which calls FloatString(7),
+	// truncating any value < 5e-8 to "0.0000000", so priceFloat becomes 0.
+	if priceFloat == 0 && expectedPrice != 0 {
+		t.Errorf("BUG CONFIRMED: details[\"price\"] = 0 for Price{N:1, D:2147483647} "+
+			"(expected ≈ %.15e). The price was silently rounded to zero by FloatString(7).",
+			expectedPrice)
+	}
+
+	// Verify price_r preserves exact values (anti-evidence check)
+	priceR, ok := output.OperationDetails["price_r"]
+	if !ok {
+		t.Fatal("details[\"price_r\"] missing from output")
+	}
+	pr, ok := priceR.(Price)
+	if !ok {
+		t.Fatalf("details[\"price_r\"] is not Price: %T", priceR)
+	}
+	if pr.Numerator != 1 || pr.Denominator != 2147483647 {
+		t.Errorf("price_r corrupted: got {N:%d, D:%d}, want {N:1, D:2147483647}",
+			pr.Numerator, pr.Denominator)
+	}
+
+	// Also verify with a boundary value: N=1, D=20000001 (just under threshold)
+	boundaryPrice := xdr.Price{N: 1, D: 20000001}
+	details := make(map[string]interface{})
+	if err := addPriceDetails(details, boundaryPrice, ""); err != nil {
+		t.Fatalf("addPriceDetails failed for boundary price: %v", err)
+	}
+	bpFloat := details["price"].(float64)
+	realBP := float64(1) / float64(20000001)
+	if bpFloat == 0 && realBP != 0 {
+		t.Errorf("BUG CONFIRMED at boundary: details[\"price\"] = 0 for Price{N:1, D:20000001} "+
+			"(expected ≈ %.15e)", realBP)
+	}
+
+	// Verify a normal price still works
+	normalPrice := xdr.Price{N: 1, D: 2}
+	normalDetails := make(map[string]interface{})
+	if err := addPriceDetails(normalDetails, normalPrice, ""); err != nil {
+		t.Fatalf("addPriceDetails failed for normal price: %v", err)
+	}
+	npFloat := normalDetails["price"].(float64)
+	if math.Abs(npFloat-0.5) > 1e-10 {
+		t.Errorf("Normal price wrong: got %v, want 0.5", npFloat)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestOfferPriceRoundedToZero
+    data_integrity_poc_test.go:115: BUG CONFIRMED: details["price"] = 0 for Price{N:1, D:2147483647} (expected ≈ 4.656612875245797e-10). The price was silently rounded to zero by FloatString(7).
+    data_integrity_poc_test.go:143: BUG CONFIRMED at boundary: details["price"] = 0 for Price{N:1, D:20000001} (expected ≈ 4.999999750000013e-08)
+--- FAIL: TestOfferPriceRoundedToZero (0.00s)
+FAIL
+```
