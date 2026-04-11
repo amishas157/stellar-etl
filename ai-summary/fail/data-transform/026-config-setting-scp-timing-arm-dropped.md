@@ -40,3 +40,31 @@ This is not a theoretical future field: the current SDK already generates the co
 ## Anti-Evidence
 
 If no ledger in the chosen range contains `config_setting_id = 16`, the corruption remains dormant. But the bug is structural: once such a row appears, the transform will silently flatten it because there is no column or extraction path for the arm.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-11
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of `ai-summary/success/export-pipeline/006-config-scp-timing-exports-empty-shell.md.gh-published`
+**Failed At**: reviewer
+
+### Trace Summary
+
+This hypothesis describes the exact same bug as the already-published finding `export-pipeline/006-config-scp-timing-exports-empty-shell`. Both identify that `TransformConfigSetting()` never calls `GetContractScpTiming()`, that `ConfigSettingOutput` has no fields for the five SCP timing parameters (`ledger_target_close_time_milliseconds`, `nomination_timeout_initial_milliseconds`, `nomination_timeout_increment_milliseconds`, `ballot_timeout_initial_milliseconds`, `ballot_timeout_increment_milliseconds`), and that config_setting_id=16 rows are emitted as empty shells with only metadata. The published finding already includes a complete PoC test, adversarial review, and suggested fix.
+
+### Code Paths Examined
+
+- `internal/transform/config_setting.go:24-107` — confirmed no call to `GetContractScpTiming()`
+- `internal/transform/schema.go:563-627` — confirmed no SCP timing fields in `ConfigSettingOutput`
+- `ai-summary/success/export-pipeline/006-config-scp-timing-exports-empty-shell.md.gh-published` — identical root cause, mechanism, affected code, and impact
+
+### Why It Failed
+
+This is a duplicate of an already-confirmed and published finding. The published success file `export-pipeline/006-config-scp-timing-exports-empty-shell` covers the identical root cause (missing `GetContractScpTiming()` call), the identical affected schema (no destination columns for the five SCP timing fields), and the identical impact (empty shell rows for config_setting_id=16). No new information is contributed by this hypothesis.
+
+### Lesson Learned
+
+Cross-check `ai-summary/success/` across all subsystems (not just the target subsystem) before submitting, as the same underlying bug may have been discovered and published under a different subsystem classification (here `export-pipeline` vs `data-transform`).

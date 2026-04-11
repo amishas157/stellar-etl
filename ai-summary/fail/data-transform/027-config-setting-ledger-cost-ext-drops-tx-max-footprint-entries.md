@@ -39,3 +39,31 @@ This path is especially easy to miss because it is only a partial omission: the 
 ## Anti-Evidence
 
 If networks happen to keep `TxMaxFootprintEntries = 0`, the missing column may not be noticed in ad hoc samples. Even then, the omission remains live because the transform has no way to preserve a non-zero value once the network starts using one.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-11
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of `ai-summary/success/export-pipeline/005-config-ledger-cost-ext-drops-footprint-cap.md.gh-published`
+**Failed At**: reviewer
+
+### Trace Summary
+
+This hypothesis describes the exact same bug as the already-published finding `export-pipeline/005-config-ledger-cost-ext-drops-footprint-cap`. Both identify that `TransformConfigSetting()` calls `GetContractLedgerCostExt()` but only copies `FeeWrite1Kb`, that `ConfigSettingOutput` has no `tx_max_footprint_entries` field, and that config_setting_id=15 rows silently drop the footprint cap while still exporting the sibling fee. The published finding already includes a complete PoC test and suggested fix.
+
+### Code Paths Examined
+
+- `internal/transform/config_setting.go:34-52` — confirmed `GetContractLedgerCostExt()` is called but only `FeeWrite1Kb` is extracted
+- `internal/transform/schema.go:563-627` — confirmed no `tx_max_footprint_entries` field in `ConfigSettingOutput`
+- `ai-summary/success/export-pipeline/005-config-ledger-cost-ext-drops-footprint-cap.md.gh-published` — identical root cause, mechanism, affected code, and impact
+
+### Why It Failed
+
+This is a duplicate of an already-confirmed and published finding. The published success file `export-pipeline/005-config-ledger-cost-ext-drops-footprint-cap` covers the identical root cause (only `FeeWrite1Kb` extracted from `ContractLedgerCostExt`), the identical affected schema (no destination column for `tx_max_footprint_entries`), and the identical impact (incomplete but plausible rows for config_setting_id=15). No new information is contributed by this hypothesis.
+
+### Lesson Learned
+
+Cross-check `ai-summary/success/` across all subsystems (not just the target subsystem) before submitting, as the same underlying bug may have been discovered and published under a different subsystem classification (here `export-pipeline` vs `data-transform`).

@@ -40,6 +40,7 @@
 - `data-integrity/006-eviction-iterator-empty-shell.md` — High — config-setting export drops `bucket_list_level`, `is_curr_bucket`, and `bucket_file_offset` from `CONFIG_SETTING_EVICTION_ITERATOR`
 - `data-integrity/007-contract-event-parquet-schema-invalid.md` — Medium — `export_contract_events --write-parquet` cannot initialize its Parquet writer because `ContractEventOutputParquet` uses invalid repeated-field schema tags
 - `data-integrity/008-contract-data-parquet-schema-invalid.md` — Medium — `export_ledger_entry_changes --export-contract-data --write-parquet` cannot initialize its Parquet writer because `ContractDataOutputParquet` uses invalid `MAP` schema tags on dynamic payload fields
+- `data-integrity/009-ledger-parquet-evicted-key-lists-invalid.md` — Medium — `export_ledgers --write-parquet` cannot initialize its Parquet writer because ledger evicted-key `[]string` fields omit the Parquet list element type
 - `export-pipeline/012-transaction-parquet-drops-tx-signers.md` — High — transaction Parquet export omits populated `tx_signers` from every row
 - `export-pipeline/013-contract-event-parquet-operation-id-dropped.md` — High — contract event Parquet conversion zeroes populated `operation_id` values
 - `export-pipeline/014-contract-code-parquet-drops-ledger-key-hash-base64.md` — High — contract-code Parquet export drops populated `ledger_key_hash_base_64` from every contract-code row
