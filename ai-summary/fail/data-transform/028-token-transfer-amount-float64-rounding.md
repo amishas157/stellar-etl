@@ -27,10 +27,6 @@ The exported row will keep `amount_raw = "9007199254740993"` but emit `amount = 
 
 - `internal/transform/token_transfer.go:47-73` — every event type parses the raw decimal string with `strconv.ParseFloat(..., 64)` and multiplies by `0.0000001`
 - `internal/transform/schema.go:659-677` — schema exposes both `amount` and exact `amount_raw`, so cross-field disagreement becomes observable
-- `/Users/amisha.singla/go/pkg/mod/github.com/stellar/go@v0.0.0-20250915171319-4914d3d0af61/processors/token_transfer/contract_events.go:76-82` — fee events are emitted as raw i128 decimal strings via `amount.String128Raw`
-- `/Users/amisha.singla/go/pkg/mod/github.com/stellar/go@v0.0.0-20250915171319-4914d3d0af61/processors/token_transfer/contract_events.go:244-250` — custom-token events use the same raw i128 string path
-- `/Users/amisha.singla/go/pkg/mod/github.com/stellar/go@v0.0.0-20250915171319-4914d3d0af61/processors/token_transfer/token_transfer_event.pb.go:123-129` — transfer events carry `Amount` as a string
-- `/Users/amisha.singla/go/pkg/mod/github.com/stellar/go@v0.0.0-20250915171319-4914d3d0af61/processors/token_transfer/token_transfer_event.pb.go:371-376` — fee events also carry `Amount` as a string
 
 ## Evidence
 
@@ -39,3 +35,31 @@ The transform already preserves the exact raw amount string in `AmountRaw`, whic
 ## Anti-Evidence
 
 Current fixtures use tiny raw values like `"100"`, so the rounding bug stays invisible in existing tests. Consumers that ignore `amount` and recompute from `amount_raw` can recover, but any downstream system that trusts the primary numeric field will ingest a silent financial discrepancy.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-11
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of `data-integrity/002-token-transfer-float64-rounding`
+**Failed At**: reviewer
+
+### Trace Summary
+
+The hypothesis describes the exact same mechanism as the already-published finding `data-integrity/002-token-transfer-float64-rounding.md.gh-published`: `transformEvents()` in `internal/transform/token_transfer.go` calls `strconv.ParseFloat(amount, 64)` on the raw amount string and then multiplies by `0.0000001`, which double-rounds large values that exceed float64's exact integer range. The published finding covers the same code path, same trigger, and same impact.
+
+### Code Paths Examined
+
+- `internal/transform/token_transfer.go:transformEvents:47-73` — confirmed the `strconv.ParseFloat` → `* 0.0000001` pattern across all five event type cases
+- `internal/transform/schema.go:659-677` — confirmed `Amount float64` and `AmountRaw string` fields exist side by side
+- `ai-summary/success/data-integrity/002-token-transfer-float64-rounding.md.gh-published` — confirmed this exact finding was already published as a Critical data-integrity bug
+
+### Why It Failed
+
+This is a duplicate of the already-confirmed and published finding `data-integrity/002-token-transfer-float64-rounding`. The published finding documents the identical mechanism (strconv.ParseFloat rounding before 1e-7 scaling), the identical code path (`transformEvents` lines 47-73), and the identical impact (Amount diverges from AmountRaw for large values).
+
+### Lesson Learned
+
+Always check `ai-summary/success/` across all subsystems (not just the target subsystem) before investigating. This finding was published under `data-integrity/` rather than `data-transform/`, making it easy to miss if only checking the current subsystem's success directory.
