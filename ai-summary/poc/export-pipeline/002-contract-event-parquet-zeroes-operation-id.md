@@ -69,3 +69,78 @@ This causes every Parquet consumer that joins contract events to operations via 
 - **Setup**: Use the existing test fixtures that produce `ContractEventOutput` with non-null `OperationID` values. The existing test at lines 58-145 already validates JSON output with specific `OperationID` values.
 - **Steps**: Call `TransformContractEvent()` on the existing test fixture that produces operation-scoped events. Then call `.ToParquet()` on each result and inspect the `OperationID` field of the returned `ContractEventOutputParquet`.
 - **Assertion**: Assert that for operation-scoped events, `parquetOutput.OperationID` equals `jsonOutput.OperationID.Int64` (non-zero). Currently it will be `0` for all events, confirming the bug.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestContractEventParquetZeroesOperationID"
+**Test Language**: Go
+
+### Demonstration
+
+The test uses the existing contract event test fixtures to produce `ContractEventOutput` structs with valid non-zero `OperationID` values (131090201534533633 and 131090201534537729). It then calls `ToParquet()` on each and asserts the Parquet `OperationID` matches the JSON value. Both operation-scoped events produce `OperationID=0` in Parquet, confirming the `ToParquet()` method silently drops the field.
+
+### Test Body
+
+```go
+func TestContractEventParquetZeroesOperationID(t *testing.T) {
+	hardCodedTransaction, hardCodedLedgerHeader, err := makeContractEventTestInput()
+	if err != nil {
+		t.Fatalf("failed to create test input: %v", err)
+	}
+
+	foundOperationEvent := false
+
+	for txIdx, tx := range hardCodedTransaction {
+		outputs, err := TransformContractEvent(tx, hardCodedLedgerHeader[txIdx])
+		if err != nil {
+			t.Fatalf("TransformContractEvent failed for tx %d: %v", txIdx, err)
+		}
+
+		for evtIdx, output := range outputs {
+			parquetRaw := output.ToParquet()
+			parquetOutput, ok := parquetRaw.(ContractEventOutputParquet)
+			if !ok {
+				t.Fatalf("ToParquet() returned unexpected type %T", parquetRaw)
+			}
+
+			if output.OperationID.Valid && output.OperationID.Int64 != 0 {
+				foundOperationEvent = true
+				t.Logf("tx[%d] event[%d]: JSON OperationID=%d (Valid=%v), Parquet OperationID=%d",
+					txIdx, evtIdx, output.OperationID.Int64, output.OperationID.Valid, parquetOutput.OperationID)
+
+				if parquetOutput.OperationID != output.OperationID.Int64 {
+					t.Errorf(
+						"BUG CONFIRMED: tx[%d] event[%d]: Parquet OperationID=%d, want %d — "+
+							"ToParquet() omits OperationID, silently zeroing operation-scoped event IDs",
+						txIdx, evtIdx,
+						parquetOutput.OperationID,
+						output.OperationID.Int64,
+					)
+				}
+			}
+		}
+	}
+
+	if !foundOperationEvent {
+		t.Fatal("Test setup error: no operation-scoped events with non-zero OperationID found in fixtures")
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestContractEventParquetZeroesOperationID
+    data_integrity_poc_test.go:282: tx[0] event[0]: JSON OperationID=131090201534533633 (Valid=true), Parquet OperationID=0
+    data_integrity_poc_test.go:286: BUG CONFIRMED: tx[0] event[0]: Parquet OperationID=0, want 131090201534533633 — ToParquet() omits OperationID, silently zeroing operation-scoped event IDs
+    data_integrity_poc_test.go:282: tx[1] event[1]: JSON OperationID=131090201534537729 (Valid=true), Parquet OperationID=0
+    data_integrity_poc_test.go:286: BUG CONFIRMED: tx[1] event[1]: Parquet OperationID=0, want 131090201534537729 — ToParquet() omits OperationID, silently zeroing operation-scoped event IDs
+--- FAIL: TestContractEventParquetZeroesOperationID (0.00s)
+FAIL
+```
