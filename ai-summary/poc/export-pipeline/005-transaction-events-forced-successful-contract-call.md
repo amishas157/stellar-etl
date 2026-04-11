@@ -76,3 +76,190 @@ Traced the full data path from `TransformContractEvent()` through `transactionEv
 - **Setup**: Create a `TransactionMetaV4` with a `TransactionEvent` at stage `BEFORE_ALL_TXS` on a failed transaction (`TransactionResultCodeTxFailed`). The existing test helper `makeContractEventTestInput()` already does this for the second test case (index 1, lines 210-308 and 389-442).
 - **Steps**: Call `TransformContractEvent()` with the test transaction and inspect the output for events sourced from `transactionEvents.TransactionEvents`.
 - **Assertion**: Assert that for the `TransactionEvent`-sourced output row, `InSuccessfulContractCall` is `false` (not `true`). Currently, the test at lines 94-109 asserts the opposite (`true`), confirming the bug. A corrected implementation should set `InSuccessfulContractCall: false` for all `TransactionEvent` entries, since they represent transaction-level lifecycle events, not contract-call events.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestTransactionEventForcedSuccessfulContractCall"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a failed Soroban transaction (`TxFailed`) carrying a `TransactionEvent` at stage `BEFORE_ALL_TXS` — a transaction-level lifecycle phase that by definition occurs before any operations are applied and cannot be inside a contract call. After running `TransformContractEvent()`, the output row has `Successful=false` (correct) but `InSuccessfulContractCall=true` (wrong). This confirms that `transactionEvent2DiagnosticEvent()` unconditionally fabricates `InSuccessfulContractCall: true` for all `TransactionEvent` entries, producing semantically contradictory output for downstream BigQuery consumers.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/ingest"
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestTransactionEventForcedSuccessfulContractCall demonstrates that
+// transactionEvent2DiagnosticEvent hard-codes InSuccessfulContractCall=true
+// for every TransactionEvent, even when the transaction failed and the event
+// stage is BEFORE_ALL_TXS — a phase that by definition cannot occur inside
+// a contract call.
+func TestTransactionEventForcedSuccessfulContractCall(t *testing.T) {
+	hardCodedBool := true
+
+	// Build a TransactionEvent at stage BEFORE_ALL_TXS (fee payment phase)
+	txEvent := xdr.TransactionEvent{
+		Stage: xdr.TransactionEventStageTransactionEventStageBeforeAllTxs,
+		Event: xdr.ContractEvent{
+			Ext:        xdr.ExtensionPoint{V: 0},
+			ContractId: &xdr.ContractId{},
+			Type:       xdr.ContractEventTypeContract,
+			Body: xdr.ContractEventBody{
+				V: 0,
+				V0: &xdr.ContractEventV0{
+					Topics: []xdr.ScVal{{
+						Type: xdr.ScValTypeScvBool,
+						B:    &hardCodedBool,
+					}},
+					Data: xdr.ScVal{
+						Type: xdr.ScValTypeScvBool,
+						B:    &hardCodedBool,
+					},
+				},
+			},
+		},
+	}
+
+	// Build a FAILED transaction carrying this TransactionEvent via MetaV4
+	txMeta := xdr.TransactionMetaV4{
+		Ext:             xdr.ExtensionPoint{},
+		TxChangesBefore: xdr.LedgerEntryChanges{},
+		Operations:      []xdr.OperationMetaV2{},
+		TxChangesAfter:  xdr.LedgerEntryChanges{},
+		SorobanMeta: &xdr.SorobanTransactionMetaV2{
+			Ext: xdr.SorobanTransactionMetaExt{
+				V: 1,
+				V1: &xdr.SorobanTransactionMetaExtV1{},
+			},
+			ReturnValue: &xdr.ScVal{},
+		},
+		Events:           []xdr.TransactionEvent{txEvent},
+		DiagnosticEvents: []xdr.DiagnosticEvent{},
+	}
+
+	genericResults := &[]xdr.OperationResult{{
+		Tr: &xdr.OperationResultTr{
+			Type: xdr.OperationTypeCreateAccount,
+			CreateAccountResult: &xdr.CreateAccountResult{
+				Code: 0,
+			},
+		},
+	}}
+
+	hardCodedHash := xdr.Hash([32]byte{0xab})
+	destination := xdr.MuxedAccount{
+		Type:    xdr.CryptoKeyTypeKeyTypeEd25519,
+		Ed25519: &xdr.Uint256{1, 2, 3},
+	}
+	memoText := "poc-test"
+
+	ledgerTx := ingest.LedgerTransaction{
+		Index: 1,
+		UnsafeMeta: xdr.TransactionMeta{
+			V:  4,
+			V4: &txMeta,
+		},
+		Envelope: xdr.TransactionEnvelope{
+			Type: xdr.EnvelopeTypeEnvelopeTypeTx,
+			V1: &xdr.TransactionV1Envelope{
+				Tx: xdr.Transaction{
+					Ext: xdr.TransactionExt{
+						V: 1,
+						SorobanData: &xdr.SorobanTransactionData{},
+					},
+					SourceAccount: testAccount1,
+					SeqNum:        1,
+					Memo:          xdr.Memo{Type: xdr.MemoTypeMemoText, Text: &memoText},
+					Fee:           1000,
+					Cond: xdr.Preconditions{
+						Type:       xdr.PreconditionTypePrecondTime,
+						TimeBounds: &xdr.TimeBounds{MinTime: 0, MaxTime: 1594272628},
+					},
+					Operations: []xdr.Operation{{
+						SourceAccount: &testAccount2,
+						Body: xdr.OperationBody{
+							Type: xdr.OperationTypePathPaymentStrictReceive,
+							PathPaymentStrictReceiveOp: &xdr.PathPaymentStrictReceiveOp{
+								Destination: destination,
+							},
+						},
+					}},
+				},
+			},
+		},
+		Result: xdr.TransactionResultPair{
+			TransactionHash: hardCodedHash,
+			Result: xdr.TransactionResult{
+				FeeCharged: 300,
+				Result: xdr.TransactionResultResult{
+					Code:    xdr.TransactionResultCodeTxFailed, // Transaction FAILED
+					Results: genericResults,
+				},
+			},
+		},
+	}
+
+	lhe := xdr.LedgerHeaderHistoryEntry{
+		Header: xdr.LedgerHeader{
+			LedgerSeq: 30521816,
+			ScpValue:  xdr.StellarValue{CloseTime: 1594272522},
+		},
+	}
+
+	// Run the production transform
+	outputs, err := TransformContractEvent(ledgerTx, lhe)
+	if err != nil {
+		t.Fatalf("TransformContractEvent returned error: %v", err)
+	}
+
+	if len(outputs) == 0 {
+		t.Fatal("expected at least one contract event output from TransactionEvents")
+	}
+
+	// The first output comes from the TransactionEvent (BEFORE_ALL_TXS stage).
+	// The transaction FAILED, so this event cannot have occurred inside a
+	// successful contract call.
+	evt := outputs[0]
+
+	if evt.Successful {
+		t.Fatal("expected Successful=false for a TxFailed transaction")
+	}
+
+	// BUG: InSuccessfulContractCall is true even though the event is a
+	// transaction-level event at BEFORE_ALL_TXS stage on a failed transaction.
+	// A correct implementation would set InSuccessfulContractCall=false for
+	// TransactionEvent entries.
+	if evt.InSuccessfulContractCall {
+		t.Errorf("DATA INTEGRITY BUG CONFIRMED: TransactionEvent at stage BEFORE_ALL_TXS "+
+			"on a FAILED transaction has InSuccessfulContractCall=true. "+
+			"Got Successful=%v, InSuccessfulContractCall=%v. "+
+			"Transaction-level events (fee payment/refund) are NOT contract-call events.",
+			evt.Successful, evt.InSuccessfulContractCall)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestTransactionEventForcedSuccessfulContractCall
+    data_integrity_poc_test.go:151: DATA INTEGRITY BUG CONFIRMED: TransactionEvent at stage BEFORE_ALL_TXS on a FAILED transaction has InSuccessfulContractCall=true. Got Successful=false, InSuccessfulContractCall=true. Transaction-level events (fee payment/refund) are NOT contract-call events.
+--- FAIL: TestTransactionEventForcedSuccessfulContractCall (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.797s
+```
