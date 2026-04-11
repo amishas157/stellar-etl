@@ -80,3 +80,4 @@
 - `external-io/005-single-ledger-change-exports-produce-no-batches.md` — High — `StreamChanges` emits no batch at all for valid one-ledger ranges, so `export_ledger_entry_changes` can finish successfully with empty output
 - `external-io/006-effects-limit-counts-transactions-not-effects.md` — Medium — `export_effects --limit` counts transactions before emitted effect rows and can exceed the requested export bound
 - `external-io/007-trades-limit-counts-operations-not-trade-rows.md` — Medium — `export_trades --limit` counts trade-capable operations before emitted trade rows and can exceed the requested export bound
+- `external-io/008-export-entry-swallows-write-errors.md` — Medium — `ExportEntry` logs failed JSON writes but returns `nil`, so exporters treat dropped rows as successful
