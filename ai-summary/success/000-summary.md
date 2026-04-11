@@ -71,3 +71,4 @@
 - `cli-commands/010-ledger-transaction-parquet-request-silently-ignored.md` — Medium — `export_ledger_transaction --write-parquet` exits successfully, writes JSON, and silently skips the requested parquet artifact
 - `cli-commands/011-token-transfer-parquet-request-silently-ignored.md` — Medium — `export_token_transfer --write-parquet` exits successfully, writes JSON, and silently skips the requested parquet artifact
 - `cli-commands/012-write-parquet-ignores-finalization-errors.md` — Medium — `WriteParquet` ignores `WriteStop()` and `Close()` failures, so callers can keep or upload truncated parquet artifacts
+- `data-transform/020-create-contract-address-preimage-drops-salt.md` — High — address-based create-contract exports drop the contract preimage salt from operation details
