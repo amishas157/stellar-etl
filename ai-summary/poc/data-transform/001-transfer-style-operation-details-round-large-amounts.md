@@ -88,3 +88,157 @@ For stroop values exceeding ~10^16 (amounts above ~900M XLM after scaling), adja
 - **Setup**: Build a `CreateAccount` operation with `StartingBalance = 90071992547409931` (exceeds float64 exact integer range after scaling). Create two operations differing by 1 stroop: `90071992547409930` and `90071992547409931`. Wrap each in a successful `LedgerTransaction` with appropriate result metadata.
 - **Steps**: Call `TransformOperation()` for each operation and extract `OperationDetails["starting_balance"]` from each result.
 - **Assertion**: Assert that the two exported `starting_balance` values are NOT equal (they should differ by 0.0000001). Under the current code, both will produce the same float64, demonstrating the precision loss. Additionally, verify that `amount.String(xdr.Int64(90071992547409931))` produces the exact string `"9007199254.7409931"` while the exported float64 produces a different decimal representation.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestPoCCreateAccountStartingBalancePrecisionLoss"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs two `CreateAccount` operations with stroop values differing by exactly 1 (90071992547409930 vs 90071992547409931), runs them through `TransformOperation()`, and confirms that both produce identical `float64` starting_balance values (9007199254.7409934998). Meanwhile, `amount.String()` correctly distinguishes them as "9007199254.7409930" vs "9007199254.7409931". This proves that `extractOperationDetails()` loses precision for large valid on-chain amounts because it uses `ConvertStroopValueToReal()` (float64) instead of the exact `amount.String()` already used by the sibling `transactionOperationWrapper.Details()` function and by `destination_min` in the same function.
+
+### Test Body
+
+```go
+func TestPoCCreateAccountStartingBalancePrecisionLoss(t *testing.T) {
+	tt := assert.New(t)
+
+	// Two stroop values that differ by 1 but collapse to the same float64
+	stroopValA := xdr.Int64(90071992547409930)
+	stroopValB := xdr.Int64(90071992547409931)
+
+	// Verify these produce DIFFERENT exact string representations
+	exactA := amount.String(stroopValA)
+	exactB := amount.String(stroopValB)
+	tt.NotEqual(exactA, exactB, "exact string representations should differ")
+	t.Logf("Exact string A: %s", exactA)
+	t.Logf("Exact string B: %s", exactB)
+
+	// Build two CreateAccount operations with these balances
+	destAccount := xdr.MustAddress("GAUJETIZVEP2NRYLUESJ3LS66NVCEGMON4UDCBCSBEVPIID773P2W6AY")
+	makeCreateAccountOp := func(balance xdr.Int64) xdr.Operation {
+		return xdr.Operation{
+			SourceAccount: &genericSourceAccount,
+			Body: xdr.OperationBody{
+				Type: xdr.OperationTypeCreateAccount,
+				CreateAccountOp: &xdr.CreateAccountOp{
+					Destination:     destAccount,
+					StartingBalance: balance,
+				},
+			},
+		}
+	}
+
+	opA := makeCreateAccountOp(stroopValA)
+	opB := makeCreateAccountOp(stroopValB)
+
+	// Build transaction envelopes containing each operation
+	makeEnvelope := func(op xdr.Operation) xdr.TransactionV1Envelope {
+		return xdr.TransactionV1Envelope{
+			Tx: xdr.Transaction{
+				SourceAccount: genericSourceAccount,
+				Memo:          xdr.Memo{},
+				Operations:    []xdr.Operation{op},
+				Ext: xdr.TransactionExt{
+					V: 0,
+					SorobanData: &xdr.SorobanTransactionData{
+						Ext:       xdr.SorobanTransactionDataExt{V: 0},
+						Resources: xdr.SorobanResources{Footprint: xdr.LedgerFootprint{}},
+					},
+				},
+			},
+		}
+	}
+
+	envA := makeEnvelope(opA)
+	envB := makeEnvelope(opB)
+
+	makeTx := func(env *xdr.TransactionV1Envelope) ingest.LedgerTransaction {
+		return ingest.LedgerTransaction{
+			Index: 1,
+			Envelope: xdr.TransactionEnvelope{
+				Type: xdr.EnvelopeTypeEnvelopeTypeTx,
+				V1:   env,
+			},
+			Result:     utils.CreateSampleResultMeta(true, 1).Result,
+			UnsafeMeta: xdr.TransactionMeta{V: 1, V1: genericTxMeta},
+		}
+	}
+
+	txA := makeTx(&envA)
+	txB := makeTx(&envB)
+
+	ledgerCloseMeta := xdr.LedgerCloseMeta{
+		V: 0,
+		V0: &xdr.LedgerCloseMetaV0{
+			LedgerHeader: xdr.LedgerHeaderHistoryEntry{},
+		},
+	}
+
+	// Transform both operations
+	outputA, err := TransformOperation(opA, 0, txA, 1, ledgerCloseMeta, "testnet")
+	tt.NoError(err, "TransformOperation should succeed for op A")
+
+	outputB, err := TransformOperation(opB, 0, txB, 1, ledgerCloseMeta, "testnet")
+	tt.NoError(err, "TransformOperation should succeed for op B")
+
+	// Extract the starting_balance values from the details maps
+	balanceA := outputA.OperationDetails["starting_balance"]
+	balanceB := outputB.OperationDetails["starting_balance"]
+
+	t.Logf("Exported starting_balance A: %v (type: %T)", balanceA, balanceA)
+	t.Logf("Exported starting_balance B: %v (type: %T)", balanceB, balanceB)
+
+	// BUG DEMONSTRATION: Both values are float64 and are IDENTICAL despite
+	// the inputs differing by 1 stroop. This proves precision loss.
+	floatA, okA := balanceA.(float64)
+	floatB, okB := balanceB.(float64)
+	tt.True(okA, "starting_balance A should be float64")
+	tt.True(okB, "starting_balance B should be float64")
+
+	// The two float64 values are the same — this IS the bug
+	tt.Equal(floatA, floatB, "BUG CONFIRMED: two different stroop values produce the same float64 output")
+
+	// Show that exact string representation preserves the difference
+	t.Logf("amount.String(A) = %s", exactA)
+	t.Logf("amount.String(B) = %s", exactB)
+	t.Logf("float64(A)       = %.10f", floatA)
+	t.Logf("float64(B)       = %.10f", floatB)
+
+	fmt.Println("=== POC RESULT: Precision loss confirmed ===")
+	fmt.Printf("Input stroops differ by 1: %d vs %d\n", stroopValA, stroopValB)
+	fmt.Printf("Exact strings differ:      %s vs %s\n", exactA, exactB)
+	fmt.Printf("Exported float64s EQUAL:   %.10f == %.10f\n", floatA, floatB)
+	fmt.Println("The map[string]interface{} container could carry exact strings,")
+	fmt.Println("as already done for destination_min in the same function.")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestPoCCreateAccountStartingBalancePrecisionLoss
+    data_integrity_poc_test.go:144: Exact string A: 9007199254.7409930
+    data_integrity_poc_test.go:145: Exact string B: 9007199254.7409931
+    data_integrity_poc_test.go:219: Exported starting_balance A: 9.007199254740993e+09 (type: float64)
+    data_integrity_poc_test.go:220: Exported starting_balance B: 9.007199254740993e+09 (type: float64)
+    data_integrity_poc_test.go:233: amount.String(A) = 9007199254.7409930
+    data_integrity_poc_test.go:234: amount.String(B) = 9007199254.7409931
+    data_integrity_poc_test.go:235: float64(A)       = 9007199254.7409934998
+    data_integrity_poc_test.go:236: float64(B)       = 9007199254.7409934998
+=== POC RESULT: Precision loss confirmed ===
+Input stroops differ by 1: 90071992547409930 vs 90071992547409931
+Exact strings differ:      9007199254.7409930 vs 9007199254.7409931
+Exported float64s EQUAL:   9007199254.7409934998 == 9007199254.7409934998
+The map[string]interface{} container could carry exact strings,
+as already done for destination_min in the same function.
+--- PASS: TestPoCCreateAccountStartingBalancePrecisionLoss (0.00s)
+PASS
+```

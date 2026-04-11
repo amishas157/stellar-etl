@@ -229,3 +229,31 @@ Sibling keys:  authorized_flag, clawback_enabled_flag (both have _flag suffix)
 PASS
 ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.855s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-11
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Does the PoC actually exercise the claimed issue?** Yes. The test reaches the live `TransformEffect()`/`effects()` trustline-flags path and demonstrates that `internal/transform/effects.go` emits `authorized_to_maintain_liabilites` without the `_flag` suffix.
+2. **Are the preconditions realistic?** Yes. A real `SetTrustLineFlags` or `AllowTrust` operation that toggles `AuthorizedToMaintainLiabilities` will hit this code path.
+3. **Is the behavior a bug or by design?** Not established as a local bug. `stellar-etl` matches the upstream `stellar/go` effect processors and Horizon ingest processors exactly: they emit the same `authorized_to_maintain_liabilites` key and have tests asserting that shape. The PoC only proves a mismatch with the `protocols/horizon` struct tag, not that the ETL diverges from the production effect generator it mirrors.
+4. **Does the impact match the claimed severity?** No confirmed local data-corruption impact. The finding hinges on treating the SDK protocol struct as the canonical export contract, but the live upstream processor path uses the same key as the ETL.
+5. **Is the finding in scope?** The only concrete inconsistency left is between upstream `stellar/go` components (`protocols/horizon` vs processor/resource-adapter pipeline). The task explicitly excludes upstream SDK bugs.
+6. **Is the test itself correct?** The test is mechanically correct but not sufficient for confirmation. It asserts absence of a reviewer-chosen key rather than validating the ETL against a proven local contract, and it passes even when the ETL is faithfully mirroring upstream behavior.
+7. **Can the results be explained WITHOUT the claimed issue?** Yes. The observed output is fully explained by compatibility with the upstream effect processor implementation that `stellar-etl` was derived from.
+8. **Is this finding novel?** Novel locally, but not confirmable as an ETL bug.
+
+### Rejection Reason
+
+The PoC demonstrates current key shape, but not a local defect. `stellar-etl` emits the same `authorized_to_maintain_liabilites` field name as the upstream `stellar/go` effects processors and Horizon ingest pipeline, so the claim that `authorized_to_maintain_liabilites_flag` is the canonical export key is not established for this repository. What remains is an upstream inconsistency between processor output and the `protocols/horizon` model, which is out of scope here.
+
+### Failed Checks
+
+3, 4, 5, 6, 7
