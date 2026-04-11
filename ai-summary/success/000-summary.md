@@ -91,3 +91,4 @@
 - `data-transform/023-ledger-transaction-drops-post-tx-apply-fee-xdr.md` — High — `ledger_transaction` export drops protocol-23+ `PostTxApplyFeeChanges` from all raw blobs
 - `external-io/009-token-transfer-amount-float64-rounding.md` — Critical — token-transfer export rounds large raw amounts through `float64` and can collapse distinct on-chain values into the same JSON `amount`
 - `external-io/011-restored-key-parquet-path-missing.md` — High — `export_ledger_entry_changes --export-restored-keys --write-parquet` emits a zero-row parquet file while JSON contains restored-key data
+- `data-transform/024-create-contract-uses-first-footprint-contract.md` — High — `create_contract` exports the first footprint contract ID instead of the contract derived from `ContractIdPreimage`
