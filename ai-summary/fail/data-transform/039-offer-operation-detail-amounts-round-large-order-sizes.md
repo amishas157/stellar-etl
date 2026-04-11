@@ -38,3 +38,32 @@ The code already treats price precision as important enough to export both round
 ## Anti-Evidence
 
 Existing tests cover only modest offer sizes, so the rounded and exact encodings coincide in the current suite. A reviewer may argue that `amount` has historically been numeric in operation details, but that does not explain why the same branch keeps exact price metadata while discarding exact size metadata.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-11
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: PASS — not previously investigated (but substantially equivalent to rejected pattern 034-038)
+**Failed At**: reviewer
+
+### Trace Summary
+
+The offer operation branches at `extractOperationDetails()` lines 701-755 convert amounts via `utils.ConvertStroopValueToReal()`, which uses `big.NewRat(int64(input), int64(10000000)).Float64()` — the best possible float64 conversion available in Go. The hypothesis cites `transactionOperationWrapper.Details()` (line 1364) as evidence of a precision-preserving alternative, but `.Details()` is never called anywhere in the codebase (confirmed via grep) — it is dead code.
+
+### Code Paths Examined
+
+- `internal/transform/operation.go:701-755` — ManageBuyOffer, ManageSellOffer, CreatePassiveSellOffer branches all use `utils.ConvertStroopValueToReal()` to convert offer amounts to float64
+- `internal/utils/main.go:85-88` — `ConvertStroopValueToReal()` uses `big.NewRat(int64, 1e7).Float64()`, the highest-precision float64 conversion path available
+- `internal/transform/operation.go:1364` — `transactionOperationWrapper.Details()` is defined but never called by any code in the repository (dead code)
+- `internal/transform/operation.go:54` — `TransformOperation()` calls `extractOperationDetails()`, not `.Details()`
+
+### Why It Failed
+
+This hypothesis falls into the same category as previously rejected fail entries 034-038: the code uses `ConvertStroopValueToReal()` → `big.NewRat().Float64()`, which is the best possible float64 conversion. The precision loss is an inherent property of the float64 schema type, not a coding error. Unlike VIABLE finding 016 (inferior inline `float64(x)/1e7` conversion) or VIABLE finding 017 (exact string computed then discarded via `ParseFloat`), the offer branches do not bypass a better conversion path and do not compute an exact value only to throw it away. The cited alternative (`transactionOperationWrapper.Details()`) is dead code that is never invoked.
+
+### Lesson Learned
+
+Dead code (`transactionOperationWrapper.Details()`) cannot serve as evidence that a better precision path exists but was not used. Float64 precision loss through `ConvertStroopValueToReal()` / `big.NewRat().Float64()` is an inherent schema design limitation, not a fixable conversion bug. This is the same pattern as fail entries 034-038.
