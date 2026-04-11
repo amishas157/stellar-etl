@@ -47,3 +47,4 @@
 - `export-pipeline/014-contract-code-parquet-drops-ledger-key-hash-base64.md` — High — contract-code Parquet export drops populated `ledger_key_hash_base_64` from every contract-code row
 - `data-integrity/011-ledger-transaction-parquet-request-silently-ignored.md` — Medium — `export_ledger_transaction --write-parquet` exits successfully, writes JSON, and silently skips the requested parquet artifact
 - `data-transform/012-transaction-parquet-fabricates-optional-fields.md` — High — transaction Parquet export rewrites absent muxed/fee-bump metadata to `""` and `0`
+- `data-transform/013-operation-parquet-collapses-source-account-muxed-nullability.md` — High — operation Parquet export rewrites absent `source_account_muxed` to empty strings
