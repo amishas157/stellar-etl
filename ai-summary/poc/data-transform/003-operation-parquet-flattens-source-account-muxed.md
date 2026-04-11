@@ -68,3 +68,103 @@ This creates a JSON/Parquet semantic disagreement: JSON omits the field (correct
 - **Setup**: Use an existing non-muxed operation test fixture (any regular `G...` source account operation). Call `TransformOperation()` to get an `OperationOutput`.
 - **Steps**: Call `.ToParquet()` on the resulting `OperationOutput` and cast to `OperationOutputParquet`. Inspect the `SourceAccountMuxed` field.
 - **Assertion**: Assert that `SourceAccountMuxed` in the Parquet output is `""` (empty string), demonstrating that the null/absent semantic from the JSON path is lost. Compare with the JSON struct where `omitempty` would suppress the field.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestOperationParquetFlattensSourceAccountMuxedToEmptyString"
+**Test Language**: Go
+
+### Demonstration
+
+The test calls `TransformOperation()` with a standard non-muxed ed25519 source account, then verifies that JSON serialization correctly omits the `source_account_muxed` field via `omitempty`, while the Parquet output (`ToParquet()`) writes an empty string `""` for the same field. This proves the JSON/Parquet semantic disagreement: JSON treats the field as absent, but Parquet persists a fabricated empty string that will confuse `IS NULL` queries downstream.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"encoding/json"
+	"testing"
+)
+
+// TestOperationParquetFlattensSourceAccountMuxedToEmptyString demonstrates that
+// when the source account is a regular (non-muxed) ed25519 key, the JSON output
+// correctly omits source_account_muxed (via omitempty), but the Parquet output
+// writes an empty string "" instead of a null/absent value.
+func TestOperationParquetFlattensSourceAccountMuxedToEmptyString(t *testing.T) {
+	// 1. Use the existing generic test fixtures: genericBumpOperation has a
+	//    CryptoKeyTypeKeyTypeEd25519 source account (non-muxed).
+	ledgerCloseMeta := makeLedgerCloseMeta()
+	operationOutput, err := TransformOperation(
+		genericBumpOperation,
+		0,
+		genericLedgerTransaction,
+		1,
+		ledgerCloseMeta,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("TransformOperation failed: %v", err)
+	}
+
+	// 2. Verify the OperationOutput.SourceAccountMuxed is the empty string
+	//    (the null.String zero-value .String was extracted).
+	if operationOutput.SourceAccountMuxed != "" {
+		t.Fatalf("expected SourceAccountMuxed to be empty string for non-muxed account, got %q",
+			operationOutput.SourceAccountMuxed)
+	}
+
+	// 3. JSON serialization: omitempty suppresses the field entirely.
+	jsonBytes, err := json.Marshal(operationOutput)
+	if err != nil {
+		t.Fatalf("JSON marshal failed: %v", err)
+	}
+	var jsonMap map[string]interface{}
+	if err := json.Unmarshal(jsonBytes, &jsonMap); err != nil {
+		t.Fatalf("JSON unmarshal failed: %v", err)
+	}
+	if _, present := jsonMap["source_account_muxed"]; present {
+		t.Errorf("JSON output should omit source_account_muxed for non-muxed account, but field is present: %v",
+			jsonMap["source_account_muxed"])
+	}
+
+	// 4. Parquet serialization: the empty string is written as a concrete value.
+	parquetOutput := operationOutput.ToParquet().(OperationOutputParquet)
+
+	// BUG DEMONSTRATION: Parquet has "" where it should be null/absent.
+	// JSON correctly omits the field, but Parquet writes an empty string.
+	if parquetOutput.SourceAccountMuxed != "" {
+		t.Errorf("Parquet SourceAccountMuxed: got %q, want \"\" (demonstrating the flattening bug)",
+			parquetOutput.SourceAccountMuxed)
+	}
+
+	// 5. Prove the semantic disagreement: JSON omits, Parquet has "".
+	t.Logf("JSON omits source_account_muxed: %v (correct)", !hasKey(jsonMap, "source_account_muxed"))
+	t.Logf("Parquet source_account_muxed = %q (incorrect — should be null, not empty string)", parquetOutput.SourceAccountMuxed)
+	t.Logf("BUG CONFIRMED: JSON and Parquet disagree on field presence for non-muxed operations")
+}
+
+func hasKey(m map[string]interface{}, key string) bool {
+	_, ok := m[key]
+	return ok
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestOperationParquetFlattensSourceAccountMuxedToEmptyString
+    data_integrity_poc_test.go:60: JSON omits source_account_muxed: true (correct)
+    data_integrity_poc_test.go:61: Parquet source_account_muxed = "" (incorrect — should be null, not empty string)
+    data_integrity_poc_test.go:62: BUG CONFIRMED: JSON and Parquet disagree on field presence for non-muxed operations
+--- PASS: TestOperationParquetFlattensSourceAccountMuxedToEmptyString (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.724s
+```
