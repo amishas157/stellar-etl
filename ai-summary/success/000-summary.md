@@ -38,3 +38,4 @@
 - `data-integrity/004-parquet-upload-precedes-write.md` — Medium — four one-shot exporters upload a missing or stale parquet artifact before generating the current file
 - `data-integrity/005-config-parallel-compute-empty-shell.md` — High — config-setting export drops `ledger_max_dependent_tx_clusters` from `CONFIG_SETTING_CONTRACT_PARALLEL_COMPUTE_V0`
 - `data-integrity/006-eviction-iterator-empty-shell.md` — High — config-setting export drops `bucket_list_level`, `is_curr_bucket`, and `bucket_file_offset` from `CONFIG_SETTING_EVICTION_ITERATOR`
+- `data-integrity/007-contract-event-parquet-schema-invalid.md` — Medium — `export_contract_events --write-parquet` cannot initialize its Parquet writer because `ContractEventOutputParquet` uses invalid repeated-field schema tags

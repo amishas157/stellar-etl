@@ -30,3 +30,30 @@ The helper reads the balance key as an `ScAddress`, but immediately narrows it w
 ## Anti-Evidence
 
 If the upstream token contract only ever stored balances under contract addresses, this path would be harmless. But Soroban token balance keys are defined as `Balance(Address)`, and `ScAddress` is a multi-arm union, so account-owned balances are a concrete valid trigger rather than a theoretical one.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-11
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of fail entry 020 in summary.md
+**Failed At**: reviewer
+
+### Trace Summary
+
+Traced `ContractBalanceFromContractData()` at lines 306-378 and the caller at lines 93-101. The function does indeed call `scAddress.GetContractId()` (line 340), rejecting non-contract addresses. However, this is correct by design: the Stellar Asset Contract (SAC) stores account-backed token balances in classic trustlines and native account balance fields, NOT in Soroban `ContractData` entries. Only contract-to-contract holdings (where a Soroban contract holds SAC tokens) are stored as `Balance(Address::Contract(...))` keys in `ContractData`.
+
+### Code Paths Examined
+
+- `internal/transform/contract_data.go:306-378` — `ContractBalanceFromContractData()` extracts balance from `ContractData` entries; `GetContractId()` on line 340 correctly filters to the only address variant that appears in SAC contract storage
+- `internal/transform/contract_data.go:93-101` — caller encodes holder with `VersionByteContract`; correct because only contract addresses reach this point
+
+### Why It Failed
+
+This is an exact duplicate of fail entry 020 ("Contract-data balance rows drop account-backed token holders"). The hypothesis misunderstands the SAC storage model: when a Stellar account (G...) holds a SAC token, the balance lives in the account's classic trustline (for credit assets) or native balance (for XLM). These are never written to Soroban `ContractData`. Only when a Soroban contract holds SAC tokens is the balance stored in `ContractData` with a `Balance(Address::Contract(...))` key. Therefore `GetContractId()` is the correct and only valid filter.
+
+### Lesson Learned
+
+The SAC protocol delegates account-backed balances to the classic ledger subsystem. The `Balance(Address)` key type in Soroban storage is only populated with contract addresses for SAC tokens. Domain knowledge of the SAC storage model is required before hypothesizing missing data in `ContractData` exports.
