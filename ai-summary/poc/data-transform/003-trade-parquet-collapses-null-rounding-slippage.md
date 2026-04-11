@@ -71,3 +71,98 @@ This is the exact same class of bug as the confirmed `seller_is_exact` null coll
 - **Setup**: Use the existing `makeTradeTestInput()` fixture. Transform with `operationIndex=0` (manage-sell-offer, produces order-book trade) and `operationIndex=2` (path-payment-strict-send, produces LP trade with `RoundingSlippage: null.IntFrom(0)`).
 - **Steps**: Call `TransformTrade()` for both operation indices. Verify JSON-layer preconditions: order-book trade has `RoundingSlippage.Valid == false`, LP trade has `RoundingSlippage.Valid == true && RoundingSlippage.Int64 == 0`. Then call `ToParquet()` on both.
 - **Assertion**: Assert that `manageOfferParquet.RoundingSlippage != lpTradeParquet.RoundingSlippage` — this will fail, confirming the null collapse. Alternatively, assert there exists some mechanism to distinguish the two states in Parquet (there isn't).
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestParquetCollapsesNullRoundingSlippageToZero"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs two `TradeOutput` structs — an order-book trade with `RoundingSlippage: null.Int{}` (Valid=false) and an LP trade with `RoundingSlippage: null.IntFrom(0)` (Valid=true, Int64=0). It verifies the JSON layer correctly distinguishes these as `null` vs `0`, then calls `ToParquet()` on both and confirms that both Parquet rows produce identical `rounding_slippage=0`, proving the null/zero distinction is destroyed during Parquet conversion.
+
+### Test Body
+
+```go
+func TestParquetCollapsesNullRoundingSlippageToZero(t *testing.T) {
+	// Order-book trade: RoundingSlippage is not applicable (null.Int{}, Valid=false)
+	orderBookTrade := TradeOutput{
+		Order:                0,
+		LedgerClosedAt:       time.Now(),
+		SellingAccountAddress: "GABC",
+		SellingAssetType:     "credit_alphanum4",
+		BuyingAccountAddress: "GDEF",
+		BuyingAssetType:      "native",
+		SellingOfferID:       null.IntFrom(12345),
+		BuyingOfferID:        null.IntFrom(67890),
+		HistoryOperationID:   100,
+		TradeType:            1, // order-book
+		RoundingSlippage:     null.Int{}, // NOT APPLICABLE — Valid=false, Int64=0
+		SellerIsExact:        null.Bool{},
+	}
+
+	// LP trade: RoundingSlippage is explicitly zero (null.IntFrom(0), Valid=true)
+	lpTrade := TradeOutput{
+		Order:                        0,
+		LedgerClosedAt:               time.Now(),
+		SellingAssetType:             "credit_alphanum4",
+		BuyingAccountAddress:         "GDEF",
+		BuyingAssetType:              "native",
+		BuyingOfferID:                null.IntFrom(67890),
+		SellingLiquidityPoolID:       null.StringFrom("poolid"),
+		LiquidityPoolFee:             null.IntFrom(30),
+		HistoryOperationID:           200,
+		TradeType:                    2, // liquidity-pool
+		RoundingSlippage:             null.IntFrom(0), // MEASURED AS ZERO — Valid=true, Int64=0
+		SellerIsExact:                null.BoolFrom(false),
+	}
+
+	// Precondition: JSON layer correctly distinguishes the two states
+	obJSON, _ := json.Marshal(orderBookTrade.RoundingSlippage)
+	lpJSON, _ := json.Marshal(lpTrade.RoundingSlippage)
+	if string(obJSON) == string(lpJSON) {
+		t.Fatalf("precondition failed: JSON representations should differ, both are %s", string(obJSON))
+	}
+	t.Logf("JSON correctly distinguishes: order-book=%s, LP=%s", string(obJSON), string(lpJSON))
+
+	// Precondition: the underlying null.Int states are different
+	if orderBookTrade.RoundingSlippage.Valid {
+		t.Fatal("precondition failed: order-book RoundingSlippage should be invalid (null)")
+	}
+	if !lpTrade.RoundingSlippage.Valid {
+		t.Fatal("precondition failed: LP RoundingSlippage should be valid")
+	}
+
+	// Convert both to Parquet
+	obParquet := orderBookTrade.ToParquet().(TradeOutputParquet)
+	lpParquet := lpTrade.ToParquet().(TradeOutputParquet)
+
+	t.Logf("Parquet RoundingSlippage: order-book=%d, LP=%d", obParquet.RoundingSlippage, lpParquet.RoundingSlippage)
+
+	// THE BUG: Both Parquet rows have identical rounding_slippage = 0,
+	// even though JSON correctly distinguishes null vs explicit 0.
+	if obParquet.RoundingSlippage == lpParquet.RoundingSlippage {
+		t.Errorf("NULL COLLAPSE CONFIRMED: order-book trade (null RoundingSlippage) and LP trade "+
+			"(explicit 0 RoundingSlippage) both produce Parquet rounding_slippage=%d — "+
+			"the null/zero distinction is destroyed", obParquet.RoundingSlippage)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestParquetCollapsesNullRoundingSlippageToZero
+    data_integrity_poc_test.go:54: JSON correctly distinguishes: order-book=null, LP=0
+    data_integrity_poc_test.go:68: Parquet RoundingSlippage: order-book=0, LP=0
+    data_integrity_poc_test.go:73: NULL COLLAPSE CONFIRMED: order-book trade (null RoundingSlippage) and LP trade (explicit 0 RoundingSlippage) both produce Parquet rounding_slippage=0 — the null/zero distinction is destroyed
+--- FAIL: TestParquetCollapsesNullRoundingSlippageToZero (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.749s
+```
