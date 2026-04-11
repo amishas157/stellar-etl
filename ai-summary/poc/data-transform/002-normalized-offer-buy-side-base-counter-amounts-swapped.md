@@ -93,14 +93,34 @@ The bug is confirmed: for every buy-side offer (`action = "b"`), the `BaseAmount
 
 **Result**: POC_PASS
 **Date**: 2026-04-11
-**PoC by**: claude-opus-4-6, high
+**PoC by**: claude-opus-4.6, high
 **Target Test File**: internal/transform/data_integrity_poc_test.go
 **Test Name**: "TestBuySideNormalizedOfferBaseCounterAmountsSwapped"
 **Test Language**: Go
 
+### Contract Violation Evidence
+
+The reviewer asked for proof that the current behavior violates a contract, not just differs from a preferred interpretation. The following evidence establishes the internal contract and demonstrates its violation:
+
+**1. Schema-level naming contract (schema.go:320–345)**
+
+The `DimOffer` struct comment states it "aligns with the BigQuery table dim_offers." It contains `BaseAmount` and `CounterAmount` fields. The linked `DimMarket` struct (also stated to align with BigQuery `dim_markets`) defines `BaseCode`/`BaseIssuer` and `CounterCode`/`CounterIssuer`. The `DimOffer.MarketID` foreign key links each offer to its canonical market. The parallel naming convention (`Base*`/`Counter*` across both structs) establishes that `BaseAmount` denominates the `BaseCode` asset and `CounterAmount` denominates the `CounterCode` asset.
+
+**2. Self-consistency violation across offer directions**
+
+Two economically equivalent offers (100 ETH ↔ 200 native) in the same market (ETH/native) produce inconsistent `BaseAmount` values:
+- Sell-side (sells ETH): `BaseAmount = 100` (ETH quantity ✓)
+- Buy-side (sells native): `BaseAmount = 200` (native quantity ✗)
+
+A downstream query like `SELECT SUM(base_amount) FROM dim_offers WHERE market_id = X` would sum 100 ETH + 200 native = 300 units of mixed assets. This is provably wrong regardless of which interpretation one assigns to the field names.
+
+**3. PR #109 original implementation (commit 8ca325c)**
+
+Commit `8ca325c` ("Add orderbook transform (#109)") introduced `offer_normalized.go` and the normalized schema. The commit message says "Added transform for normalized offers" and the schema comments claim alignment with BigQuery tables. The original implementation unconditionally assigned `BaseAmount = offer.Amount` without branching on `action`, and the unit test locked in the resulting values. This is consistent with an implementation oversight — the `action` field was correctly computed but not used to adjust the amount assignment. The PR description's claim of schema consistency supports the intent that these fields should align with the market's canonical sides, making the omission a bug rather than a design choice.
+
 ### Demonstration
 
-The test constructs a buy-side offer (selling native, buying ETH) and calls `TransformOfferNormalized`. It verifies that the market correctly identifies ETH as the base asset and native as the counter asset, and that `action = "b"`. It then proves that `BaseAmount` contains the native (counter) quantity (262.8450327) instead of the ETH (base) quantity (135.1647), and `CounterAmount` contains the ETH (base) quantity instead of the native (counter) quantity — confirming that buy-side normalized offers have their base and counter amounts swapped.
+The test constructs two economically equivalent offers (100 ETH ↔ 200 native) in the same canonical market (ETH base, native counter) — one sell-side and one buy-side. It verifies that sell-side correctly maps `BaseAmount` to the ETH (base) quantity, then proves that buy-side maps `BaseAmount` to the native (counter) quantity instead. The inconsistency between identical markets depending on offer direction proves the contract violation: `BaseAmount` cannot be reliably aggregated or compared across offers in the same market.
 
 ### Test Body
 
@@ -108,20 +128,35 @@ The test constructs a buy-side offer (selling native, buying ETH) and calls `Tra
 package transform
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stellar/go-stellar-sdk/ingest"
 	"github.com/stellar/go-stellar-sdk/xdr"
 )
 
-// TestBuySideNormalizedOfferBaseCounterAmountsSwapped demonstrates that for buy-side
-// normalized offers (action="b"), BaseAmount and CounterAmount are swapped relative
-// to the canonical market definition.
+// TestBuySideNormalizedOfferBaseCounterAmountsSwapped demonstrates that the DimOffer
+// struct violates the contract established by DimMarket: for buy-side offers,
+// BaseAmount contains the counter-asset quantity and CounterAmount contains the
+// base-asset quantity.
+//
+// Proof strategy: construct two economically equivalent offers in the SAME market
+// (ETH/native) — one sell-side and one buy-side — and show that:
+//   - sell-side correctly maps BaseAmount → ETH quantity, CounterAmount → native quantity
+//   - buy-side SWAPS them: BaseAmount → native quantity, CounterAmount → ETH quantity
+//
+// This is a contract violation because DimOffer.MarketID links to a DimMarket where
+// BaseCode="ETH" and CounterCode="native". The BaseAmount field in DimOffer must
+// always denominate the market's base asset (ETH). Aggregating BaseAmount across
+// offers in the same market produces a sum of mixed asset quantities.
 func TestBuySideNormalizedOfferBaseCounterAmountsSwapped(t *testing.T) {
-	// Setup: Use the same fixture as the existing test.
-	// Offer sells native, buys ETH. Market sorts to ETH(base)/native(counter).
-	// Since the seller is selling the counter asset (native), action = "b".
-	input := ingest.Change{
+	const ledgerSeq uint32 = 100
+
+	// === SELL-SIDE OFFER ===
+	// Sells 100 ETH (base asset) to buy native (counter asset)
+	// XDR price = buying/selling = native/ETH = 2/1
+	// So: 100 ETH → 200 native
+	sellSideInput := ingest.Change{
 		ChangeType: xdr.LedgerEntryChangeTypeLedgerEntryCreated,
 		Type:       xdr.LedgerEntryTypeOffer,
 		Pre:        nil,
@@ -131,77 +166,121 @@ func TestBuySideNormalizedOfferBaseCounterAmountsSwapped(t *testing.T) {
 				Type: xdr.LedgerEntryTypeOffer,
 				Offer: &xdr.OfferEntry{
 					SellerId: testAccount1ID,
-					OfferId:  260678439,
-					Selling:  nativeAsset,
-					Buying:   ethAsset,
-					Amount:   2628450327, // 262.8450327 native (the selling/counter asset)
-					Price: xdr.Price{
-						N: 920936891,
-						D: 1790879058,
-					},
-					Flags: 2,
+					OfferId:  1001,
+					Selling:  ethAsset,    // base asset
+					Buying:   nativeAsset, // counter asset
+					Amount:   1000000000,  // 100 ETH in stroops
+					Price:    xdr.Price{N: 2, D: 1}, // 2 native per ETH
+					Flags:    0,
 				},
 			},
 		},
 	}
 
-	result, err := TransformOfferNormalized(input, 100)
+	// === BUY-SIDE OFFER ===
+	// Sells 200 native (counter asset) to buy ETH (base asset)
+	// XDR price = buying/selling = ETH/native = 1/2
+	// So: 200 native → 100 ETH (economically equivalent to sell-side)
+	buySideInput := ingest.Change{
+		ChangeType: xdr.LedgerEntryChangeTypeLedgerEntryCreated,
+		Type:       xdr.LedgerEntryTypeOffer,
+		Pre:        nil,
+		Post: &xdr.LedgerEntry{
+			LastModifiedLedgerSeq: xdr.Uint32(30715263),
+			Data: xdr.LedgerEntryData{
+				Type: xdr.LedgerEntryTypeOffer,
+				Offer: &xdr.OfferEntry{
+					SellerId: testAccount1ID,
+					OfferId:  1002,
+					Selling:  nativeAsset, // counter asset
+					Buying:   ethAsset,    // base asset
+					Amount:   2000000000,  // 200 native in stroops
+					Price:    xdr.Price{N: 1, D: 2}, // 0.5 ETH per native
+					Flags:    0,
+				},
+			},
+		},
+	}
+
+	sellResult, err := TransformOfferNormalized(sellSideInput, ledgerSeq)
 	if err != nil {
-		t.Fatalf("TransformOfferNormalized failed: %v", err)
+		t.Fatalf("sell-side TransformOfferNormalized failed: %v", err)
 	}
 
-	// Verify market canonical ordering: ETH is base, native is counter
-	if result.Market.BaseCode != "ETH" {
-		t.Fatalf("Expected market base code ETH, got %s", result.Market.BaseCode)
-	}
-	if result.Market.CounterCode != "native" {
-		t.Fatalf("Expected market counter code native, got %s", result.Market.CounterCode)
+	buyResult, err := TransformOfferNormalized(buySideInput, ledgerSeq)
+	if err != nil {
+		t.Fatalf("buy-side TransformOfferNormalized failed: %v", err)
 	}
 
-	// Verify action is buy-side
-	if result.Offer.Action != "b" {
-		t.Fatalf("Expected action 'b', got %s", result.Offer.Action)
+	// --- Verify both offers map to the same market with ETH as base ---
+
+	if sellResult.Market.BaseCode != "ETH" || sellResult.Market.CounterCode != "native" {
+		t.Fatalf("sell-side market unexpected: base=%s counter=%s",
+			sellResult.Market.BaseCode, sellResult.Market.CounterCode)
+	}
+	if buyResult.Market.BaseCode != "ETH" || buyResult.Market.CounterCode != "native" {
+		t.Fatalf("buy-side market unexpected: base=%s counter=%s",
+			buyResult.Market.BaseCode, buyResult.Market.CounterCode)
+	}
+	if sellResult.Market.ID != buyResult.Market.ID {
+		t.Fatalf("offers should share the same market ID: sell=%d buy=%d",
+			sellResult.Market.ID, buyResult.Market.ID)
 	}
 
-	// The offer sells 262.8450327 native and buys ETH at price 920936891/1790879058.
-	// offer.Amount = 262.8450327 (native quantity, the selling asset)
-	// offer.Amount * price = 135.16473161502083 (ETH quantity, the buying asset)
+	// --- Verify action correctness ---
+
+	if sellResult.Offer.Action != "s" {
+		t.Fatalf("sell-side action should be 's', got %q", sellResult.Offer.Action)
+	}
+	if buyResult.Offer.Action != "b" {
+		t.Fatalf("buy-side action should be 'b', got %q", buyResult.Offer.Action)
+	}
+
+	// --- Verify sell-side amounts are correct ---
+	// Sell-side: selling 100 ETH (base) for 200 native (counter)
+	// BaseAmount should be 100 (ETH quantity), CounterAmount should be 200 (native quantity)
+
+	const tolerance = 1e-9
+	if math.Abs(sellResult.Offer.BaseAmount-100.0) > tolerance {
+		t.Errorf("sell-side BaseAmount: got %v, want 100 (ETH)", sellResult.Offer.BaseAmount)
+	}
+	if math.Abs(sellResult.Offer.CounterAmount-200.0) > tolerance {
+		t.Errorf("sell-side CounterAmount: got %v, want 200 (native)", sellResult.Offer.CounterAmount)
+	}
+	t.Logf("SELL-SIDE (action=%q): BaseAmount=%.1f (ETH ✓), CounterAmount=%.1f (native ✓)",
+		sellResult.Offer.Action, sellResult.Offer.BaseAmount, sellResult.Offer.CounterAmount)
+
+	// --- Demonstrate the buy-side bug ---
+	// Buy-side: selling 200 native (counter) to buy 100 ETH (base)
+	// Economically equivalent: same 100 ETH ↔ 200 native exchange.
 	//
-	// Since ETH is the base asset and native is the counter asset:
-	//   Correct BaseAmount  = ETH quantity  = 135.16473161502083
-	//   Correct CounterAmount = native quantity = 262.8450327
+	// CORRECT: BaseAmount=100 (ETH quantity), CounterAmount=200 (native quantity)
+	// ACTUAL:  BaseAmount=200 (native quantity), CounterAmount=100 (ETH quantity) — SWAPPED
 	//
-	// BUG: The code unconditionally assigns BaseAmount = offer.Amount (selling quantity)
-	// and CounterAmount = offer.Amount * price (buying quantity), which is only correct
-	// for sell-side offers. For buy-side offers, these are swapped.
+	// This proves a contract violation: in the same market, BaseAmount means
+	// "ETH quantity" for sell-side but "native quantity" for buy-side.
 
-	nativeQuantity := 262.8450327        // the selling (counter) asset amount
-	ethQuantity := 135.16473161502083    // the buying (base) asset amount
+	buySideBaseIsWrong := math.Abs(buyResult.Offer.BaseAmount-200.0) < tolerance
+	buySideCounterIsWrong := math.Abs(buyResult.Offer.CounterAmount-100.0) < tolerance
 
-	// Demonstrate the bug: BaseAmount contains the native (counter) quantity
-	// instead of the ETH (base) quantity
-	if result.Offer.BaseAmount == ethQuantity {
-		t.Error("BaseAmount correctly holds ETH quantity — bug is not present (unexpected)")
+	if !buySideBaseIsWrong {
+		t.Errorf("Expected buy-side BaseAmount=200 (native, demonstrating the swap), got %v",
+			buyResult.Offer.BaseAmount)
 	}
-	if result.Offer.BaseAmount != nativeQuantity {
-		t.Errorf("BaseAmount unexpected value: got %v, want %v (native quantity proving the swap)",
-			result.Offer.BaseAmount, nativeQuantity)
-	} else {
-		t.Logf("BUG CONFIRMED: BaseAmount = %v (native/counter quantity), but base asset is ETH",
-			result.Offer.BaseAmount)
+	if !buySideCounterIsWrong {
+		t.Errorf("Expected buy-side CounterAmount=100 (ETH, demonstrating the swap), got %v",
+			buyResult.Offer.CounterAmount)
 	}
 
-	// Demonstrate the bug: CounterAmount contains the ETH (base) quantity
-	// instead of the native (counter) quantity
-	if result.Offer.CounterAmount == nativeQuantity {
-		t.Error("CounterAmount correctly holds native quantity — bug is not present (unexpected)")
-	}
-	if result.Offer.CounterAmount != ethQuantity {
-		t.Errorf("CounterAmount unexpected value: got %v, want %v (ETH quantity proving the swap)",
-			result.Offer.CounterAmount, ethQuantity)
-	} else {
-		t.Logf("BUG CONFIRMED: CounterAmount = %v (ETH/base quantity), but counter asset is native",
-			result.Offer.CounterAmount)
+	if buySideBaseIsWrong && buySideCounterIsWrong {
+		t.Logf("BUY-SIDE  (action=%q): BaseAmount=%.1f (native ✗), CounterAmount=%.1f (ETH ✗)",
+			buyResult.Offer.Action, buyResult.Offer.BaseAmount, buyResult.Offer.CounterAmount)
+		t.Log("")
+		t.Log("CONTRACT VIOLATION DEMONSTRATED:")
+		t.Log("  Market: ETH(base) / native(counter)")
+		t.Logf("  Sell-side BaseAmount=%.1f correctly holds ETH (base) quantity", sellResult.Offer.BaseAmount)
+		t.Logf("  Buy-side  BaseAmount=%.1f incorrectly holds native (counter) quantity", buyResult.Offer.BaseAmount)
+		t.Log("  Aggregating BaseAmount across both offers sums 100 ETH + 200 native = mixed-asset total")
 	}
 }
 ```
@@ -210,9 +289,23 @@ func TestBuySideNormalizedOfferBaseCounterAmountsSwapped(t *testing.T) {
 
 ```
 === RUN   TestBuySideNormalizedOfferBaseCounterAmountsSwapped
-    data_integrity_poc_test.go:83: BUG CONFIRMED: BaseAmount = 262.8450327 (native/counter quantity), but base asset is ETH
-    data_integrity_poc_test.go:96: BUG CONFIRMED: CounterAmount = 135.16473161502083 (ETH/base quantity), but counter asset is native
+    data_integrity_poc_test.go:123: SELL-SIDE (action="s"): BaseAmount=100.0 (ETH ✓), CounterAmount=200.0 (native ✓)
+    data_integrity_poc_test.go:149: BUY-SIDE  (action="b"): BaseAmount=200.0 (native ✗), CounterAmount=100.0 (ETH ✗)
+    data_integrity_poc_test.go:151: 
+    data_integrity_poc_test.go:152: CONTRACT VIOLATION DEMONSTRATED:
+    data_integrity_poc_test.go:153:   Market: ETH(base) / native(counter)
+    data_integrity_poc_test.go:154:   Sell-side BaseAmount=100.0 correctly holds ETH (base) quantity
+    data_integrity_poc_test.go:155:   Buy-side  BaseAmount=200.0 incorrectly holds native (counter) quantity
+    data_integrity_poc_test.go:156:   Aggregating BaseAmount across both offers sums 100 ETH + 200 native = mixed-asset total
 --- PASS: TestBuySideNormalizedOfferBaseCounterAmountsSwapped (0.00s)
 PASS
-ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.723s
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.818s
 ```
+
+### Revision Notes: Addressing Reviewer Concerns
+
+**Re: Authoritative schema contract** — No external `stellar/voyager#18` schema or BigQuery DDL exists in this repo. However, the internal schema in `schema.go:320–345` IS the authoritative contract: each struct's GoDoc comment explicitly states it "aligns with the BigQuery table" (`dim_offers`, `dim_markets`). The `DimOffer.MarketID` foreign key links to `DimMarket`, and the parallel naming (`BaseAmount`↔`BaseCode`, `CounterAmount`↔`CounterCode`) establishes the field-to-asset correspondence within the codebase itself.
+
+**Re: Internal self-consistency invariant** — The revised PoC proves the contract violation through self-consistency: two economically equivalent offers (100 ETH ↔ 200 native) in the same market produce `BaseAmount = 100` (sell-side) and `BaseAmount = 200` (buy-side). Since both rows reference the same `DimMarket` where `BaseCode = "ETH"`, a `SUM(base_amount)` query produces 300 — mixing ETH and native quantities. This is provably wrong regardless of which interpretation one assigns to the field names.
+
+**Re: PR #109 original-implementation evidence** — Commit `8ca325c` introduced the normalized-offer transform. The `action` field is correctly computed (branching on whether the selling asset equals the sorted base asset), but the amount assignment on lines 165–166 ignores this computation entirely — a classic "compute but don't use" oversight. The unit test then locked in the resulting values without noticing the semantic mismatch between `BaseCode = "ETH"` and `BaseAmount = 262.84` (native quantity). The PR description's claim of schema consistency supports the *intent* for these fields to correspond to canonical market sides, making the omission a bug in the implementation, not a deliberate design choice.
