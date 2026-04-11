@@ -92,3 +92,4 @@
 - `external-io/009-token-transfer-amount-float64-rounding.md` — Critical — token-transfer export rounds large raw amounts through `float64` and can collapse distinct on-chain values into the same JSON `amount`
 - `external-io/011-restored-key-parquet-path-missing.md` — High — `export_ledger_entry_changes --export-restored-keys --write-parquet` emits a zero-row parquet file while JSON contains restored-key data
 - `data-transform/024-create-contract-uses-first-footprint-contract.md` — High — `create_contract` exports the first footprint contract ID instead of the contract derived from `ContractIdPreimage`
+- `data-transform/025-invoke-contract-asset-balance-changes-ignore-operation-events.md` — High — `invoke_contract` exports empty `asset_balance_changes` when SAC contract events are not duplicated into diagnostics
