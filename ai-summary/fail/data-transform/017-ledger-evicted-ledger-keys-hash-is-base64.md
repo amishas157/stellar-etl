@@ -134,6 +134,34 @@ func TestEvictedLedgerKeysHashIsBase64NotHash(t *testing.T) {
 }
 ```
 
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-11
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Exercises claimed bug**: YES — the PoC correctly shows that `transformLedgerKeys()` stores `xdr.MarshalBase64(key)` while `utils.LedgerKeyToLedgerKeyHash()` returns a SHA-256 hex digest for the same `xdr.LedgerKey`.
+2. **Realistic preconditions**: YES — real Soroban ledger close meta can carry `EvictedKeys`, and `TransformLedger()` routes both V1 and V2 close-meta paths through `transformLedgerKeys()`.
+3. **Bug vs by-design**: NOT PROVEN BUG — the checked-in ledger unit test (`internal/transform/ledger_test.go`) explicitly expects the base64 value in `EvictedLedgerKeysHash`, and I found no repository contract requiring this ledger field to use the hex-digest representation used by other tables.
+4. **Impact vs severity**: NOT HIGH — the PoC proves only a representation mismatch against a helper, not that downstream consumers receive semantically wrong evicted-key data. The alleged join breakage is speculative and unsupported by repository evidence.
+5. **In scope**: NO — without proof that the exported value is incorrect rather than intentionally serialized differently, this reduces to a naming/consistency complaint, which is outside the data-corruption objective.
+6. **Test correctness**: PARTIAL — the test is fine for proving inequality with the hash helper, but it assumes without demonstrating a contract that `evicted_ledger_keys_hash` must equal that helper's output.
+7. **Alternative explanations**: PRESENT — this field may intentionally carry the full serialized evicted keys because the ledger export has no separate raw-key/base64 companion column for them.
+8. **Novelty**: UNRESOLVED — novelty does not affect the rejection.
+
+### Rejection Reason
+
+The PoC demonstrates a naming and format inconsistency, not confirmed data corruption. The repository's own regression test locks in base64 for this field, and there is no codebase contract showing that `history_ledgers.evicted_ledger_keys_hash` is supposed to contain the SHA-256 hex digest used by other ledger-key fields.
+
+### Failed Checks
+
+3, 4, 5, 6, 7
+
 ### Test Output
 
 ```

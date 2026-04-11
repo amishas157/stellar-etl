@@ -100,3 +100,134 @@ This is not a sparse-union design issue (which was investigated and correctly re
 - **Setup**: Create a mock `ingest.Change` with `ConfigSettingEntry` whose `ConfigSettingId` is `ConfigSettingIdConfigSettingContractParallelComputeV0` (14) and `ContractParallelCompute` set to `ConfigSettingContractParallelComputeV0{LedgerMaxDependentTxClusters: 42}`. Follow the existing test pattern (e.g., the `CONFIG_SETTING_CONTRACT_MAX_SIZE_BYTES` test case).
 - **Steps**: Call `TransformConfigSetting(change, header)` with the mock change.
 - **Assertion**: The returned `ConfigSettingOutput` should contain the value `42` in a `LedgerMaxDependentTxClusters` field. Currently, no such field exists, so the test will fail to compile — demonstrating the schema gap. Alternatively, assert that `config_setting_id == 14` and then show that no output field carries the value `42`, proving data loss.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestConfigParallelComputeEmptyShell"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `CONFIG_SETTING_CONTRACT_PARALLEL_COMPUTE_V0` entry (config_setting_id=14) with `LedgerMaxDependentTxClusters=42`, passes it through the production `TransformConfigSetting()` function, and verifies the output. The transform succeeds and returns `config_setting_id=14` with valid metadata (`last_modified_ledger=50000000`, `ledger_sequence=10`), but no output field carries the input value `42`. The entire JSON output was scanned field-by-field — every payload column is zero. This proves the active XDR union arm's only meaningful field is silently dropped, producing a plausible but hollow row.
+
+### Test Body
+
+```go
+func TestConfigParallelComputeEmptyShell(t *testing.T) {
+	const inputClusterLimit xdr.Uint32 = 42
+
+	parallelCompute := xdr.ConfigSettingContractParallelComputeV0{
+		LedgerMaxDependentTxClusters: inputClusterLimit,
+	}
+
+	ledgerEntry := xdr.LedgerEntry{
+		LastModifiedLedgerSeq: 50000000,
+		Data: xdr.LedgerEntryData{
+			Type: xdr.LedgerEntryTypeConfigSetting,
+			ConfigSetting: &xdr.ConfigSettingEntry{
+				ConfigSettingId:         xdr.ConfigSettingIdConfigSettingContractParallelComputeV0,
+				ContractParallelCompute: &parallelCompute,
+			},
+		},
+	}
+
+	change := ingest.Change{
+		ChangeType: xdr.LedgerEntryChangeTypeLedgerEntryCreated,
+		Type:       xdr.LedgerEntryTypeConfigSetting,
+		Pre:        nil,
+		Post:       &ledgerEntry,
+	}
+
+	header := xdr.LedgerHeaderHistoryEntry{
+		Header: xdr.LedgerHeader{
+			ScpValue: xdr.StellarValue{
+				CloseTime: 1000,
+			},
+			LedgerSeq: 10,
+		},
+	}
+
+	output, err := TransformConfigSetting(change, header)
+	if err != nil {
+		t.Fatalf("TransformConfigSetting returned unexpected error: %v", err)
+	}
+
+	// The transform correctly identifies this as config_setting_id=14.
+	if output.ConfigSettingId != 14 {
+		t.Fatalf("expected ConfigSettingId=14, got %d", output.ConfigSettingId)
+	}
+
+	// Serialize the output to JSON and search for the value 42.
+	jsonBytes, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("failed to marshal output: %v", err)
+	}
+
+	jsonStr := string(jsonBytes)
+
+	// Prove no output field carries the input value 42.
+	foundValue := false
+	var outputMap map[string]interface{}
+	if err := json.Unmarshal(jsonBytes, &outputMap); err != nil {
+		t.Fatalf("failed to unmarshal output: %v", err)
+	}
+	for key, val := range outputMap {
+		switch v := val.(type) {
+		case float64:
+			if v == 42 {
+				foundValue = true
+				t.Logf("Found value 42 in field %q", key)
+			}
+		}
+	}
+
+	if !foundValue {
+		t.Errorf("DATA LOSS CONFIRMED: CONFIG_SETTING_CONTRACT_PARALLEL_COMPUTE_V0 (id=14) "+
+			"with LedgerMaxDependentTxClusters=%d produces an empty-shell row. "+
+			"No output field carries the input value. JSON output: %s",
+			inputClusterLimit, jsonStr)
+	}
+
+	// Also verify metadata is present (the row looks plausible but is hollow).
+	if output.LastModifiedLedger != 50000000 {
+		t.Errorf("expected LastModifiedLedger=50000000, got %d", output.LastModifiedLedger)
+	}
+	if output.LedgerSequence != 10 {
+		t.Errorf("expected LedgerSequence=10, got %d", output.LedgerSequence)
+	}
+
+	// Show the schema gap explicitly.
+	zeroOutput := ConfigSettingOutput{}
+	zeroOutput.ConfigSettingId = 14
+	zeroOutput.LastModifiedLedger = output.LastModifiedLedger
+	zeroOutput.LedgerEntryChange = output.LedgerEntryChange
+	zeroOutput.ClosedAt = output.ClosedAt
+	zeroOutput.LedgerSequence = output.LedgerSequence
+
+	if output.ContractMaxSizeBytes != zeroOutput.ContractMaxSizeBytes &&
+		output.LedgerMaxInstructions != zeroOutput.LedgerMaxInstructions {
+		t.Logf("Some payload fields are non-zero — hypothesis may need revision")
+	} else {
+		fmt.Printf("CONFIRMED: config_setting_id=14 row has zero-valued payload columns "+
+			"(ContractMaxSizeBytes=%d, LedgerMaxInstructions=%d) — "+
+			"indistinguishable from an empty struct\n",
+			output.ContractMaxSizeBytes, output.LedgerMaxInstructions)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestConfigParallelComputeEmptyShell
+    data_integrity_poc_test.go:200: DATA LOSS CONFIRMED: CONFIG_SETTING_CONTRACT_PARALLEL_COMPUTE_V0 (id=14) with LedgerMaxDependentTxClusters=42 produces an empty-shell row. No output field carries the input value. JSON output: {"config_setting_id":14,"contract_max_size_bytes":0,"ledger_max_instructions":0,"tx_max_instructions":0,"fee_rate_per_instructions_increment":0,"tx_memory_limit":0,"ledger_max_read_ledger_entries":0,"ledger_max_disk_read_entries":0,"ledger_max_read_bytes":0,"ledger_max_disk_read_bytes":0,"ledger_max_write_ledger_entries":0,"ledger_max_write_bytes":0,"tx_max_read_ledger_entries":0,"tx_max_disk_read_entries":0,"tx_max_read_bytes":0,"tx_max_disk_read_bytes":0,"tx_max_write_ledger_entries":0,"tx_max_write_bytes":0,"fee_read_ledger_entry":0,"fee_disk_read_ledger_entry":0,"fee_write_ledger_entry":0,"fee_read_1kb":0,"fee_write_1kb":0,"fee_disk_read_1kb":0,"bucket_list_target_size_bytes":0,"soroban_state_target_size_bytes":0,"write_fee_1kb_bucket_list_low":0,"rent_fee_1kb_soroban_state_size_low":0,"write_fee_1kb_bucket_list_high":0,"rent_fee_1kb_soroban_state_size_high":0,"bucket_list_write_fee_growth_factor":0,"soroban_state_rent_fee_growth_factor":0,"fee_historical_1kb":0,"tx_max_contract_events_size_bytes":0,"fee_contract_events_1kb":0,"ledger_max_txs_size_bytes":0,"tx_max_size_bytes":0,"fee_tx_size_1kb":0,"contract_cost_params_cpu_insns":[],"contract_cost_params_mem_bytes":[],"contract_data_key_size_bytes":0,"contract_data_entry_size_bytes":0,"max_entry_ttl":0,"min_temporary_ttl":0,"min_persistent_ttl":0,"auto_bump_ledgers":0,"persistent_rent_rate_denominator":0,"temp_rent_rate_denominator":0,"max_entries_to_archive":0,"bucket_list_size_window_sample_size":0,"live_soroban_state_size_window_sample_size":0,"live_soroban_state_size_window_sample_period":0,"eviction_scan_size":0,"starting_eviction_scan_level":0,"ledger_max_tx_count":0,"bucket_list_size_window":[],"live_soroban_state_size_window":[],"last_modified_ledger":50000000,"ledger_entry_change":0,"deleted":false,"closed_at":"1970-01-01T00:16:40Z","ledger_sequence":10}
+CONFIRMED: config_setting_id=14 row has zero-valued payload columns (ContractMaxSizeBytes=0, LedgerMaxInstructions=0) — indistinguishable from an empty struct
+--- FAIL: TestConfigParallelComputeEmptyShell (0.00s)
+FAIL
+```

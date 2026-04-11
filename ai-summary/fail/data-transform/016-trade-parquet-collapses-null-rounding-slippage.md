@@ -166,3 +166,31 @@ func TestParquetCollapsesNullRoundingSlippageToZero(t *testing.T) {
 FAIL
 FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.749s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-11
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Exercises claimed bug**: PASS — I rewrote the PoC to use `makeTradeTestInput()`, `TransformTrade(0, ...)` for a real order-book trade, and `TransformTrade(4, ...)` for a real liquidity-pool trade before calling the production `ToParquet()` converter.
+2. **Realistic preconditions**: PASS — both rows come from existing fixture operations and ordinary Stellar trade-producing operation types.
+3. **Bug vs by-design**: FAIL — this is not unrecoverable row corruption. `trade_type=1` identifies order-book trades where rounding slippage is not applicable, while successful liquidity-pool trades export `trade_type=2` and always compute a valid `rounding_slippage` value.
+4. **Impact/severity**: FAIL — unlike the confirmed `seller_is_exact` issue, the semantic distinction is still recoverable from the same Parquet row by checking `trade_type`, so the row is not silently wrong in the claimed way.
+5. **In scope**: PASS — the code path is real and in the transform layer.
+6. **Test correctness**: FAIL — the PoC only compared the `rounding_slippage` column and ignored `trade_type`, so it treated a recoverable single-column collision as if it were irrecoverable data corruption.
+7. **Alternative explanations**: FAIL — the observed `rounding_slippage=0` on order-book rows is fully explained by the row's `trade_type=1`; it is not indistinguishable from a zero-slippage liquidity-pool row, which carries `trade_type=2`.
+8. **Novelty**: PASS — not relevant to the rejection.
+
+### Rejection Reason
+
+The PoC demonstrates only that the `rounding_slippage` column alone collides between an order-book row and a liquidity-pool row. It does not demonstrate wrong exported trade rows. Successful exports already preserve the applicability boundary in `trade_type`, and the liquidity-pool path does not leave `rounding_slippage` null. Because downstream consumers can deterministically recover "not applicable" versus "measured zero" from the same row, this is not the same unrecoverable semantic loss as the confirmed `seller_is_exact` finding.
+
+### Failed Checks
+
+3, 4, 6, 7
