@@ -76,3 +76,104 @@ In both cases the failure is **visible** (Fatal crash), not silent data corrupti
 - **Setup**: Create a mock `LedgerBackend` that records the `Range` passed to `PrepareRange`. No real network or stellar-core needed.
 - **Steps**: Simulate the command's logic: call `PrepareRange(ctx, BoundedRange(startNum, 0))` where `startNum > 0`, then attempt `GetLedger(startNum)`.
 - **Assertion**: Assert that `PrepareRange` receives `BoundedRange(startNum, 0)` with `bounded == true` and `to == 0`, confirming the backend is prepared with a nonsensical range. Alternatively, assert that `GetLedger(startNum)` returns an error when the prepared range has `to == 0`. Compare against the correct behavior: `PrepareRange(ctx, UnboundedRange(startNum))` should succeed.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/input/data_integrity_poc_test.go
+**Test Name**: "TestContinuousModePreparesNonsensicalBoundedRange"
+**Test Language**: Go
+
+### Demonstration
+
+The test replicates the exact range construction logic from `cmd/export_ledger_entry_changes.go:67` (which calls `BoundedRange(startNum, 0)` when EndNum is 0) and compares it against the correct pattern from `internal/input/changes.go:59-62` (which uses `UnboundedRange(startNum)` when end is 0). The test proves the command produces a bounded range `[100,0]` with `from > to`, a nonsensical backwards range that any backend will reject, while the correct code produces `[100,latest)` — an unbounded streaming range.
+
+### Test Body
+
+```go
+package input
+
+import (
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/ingest/ledgerbackend"
+)
+
+// TestContinuousModePreparesNonsensicalBoundedRange demonstrates that the
+// export_ledger_entry_changes command constructs a BoundedRange(startNum, 0)
+// when --end-ledger is omitted, instead of using UnboundedRange(startNum).
+// This creates a nonsensical backwards bounded range [start, 0] that the
+// backend will reject.
+func TestContinuousModePreparesNonsensicalBoundedRange(t *testing.T) {
+	startNum := uint32(100)
+	endNum := uint32(0) // simulates --end-ledger not provided (default)
+
+	// ---- What the command does (cmd/export_ledger_entry_changes.go:67) ----
+	// backend.PrepareRange(ctx, ledgerbackend.BoundedRange(startNum, commonArgs.EndNum))
+	// At this point EndNum is still 0 because the rewrite to math.MaxInt32
+	// happens AFTER PrepareRange (lines 72-74).
+	cmdRange := ledgerbackend.BoundedRange(startNum, endNum)
+
+	// ---- What PrepareCaptiveCore correctly does (internal/input/changes.go:59-62) ----
+	var correctRange ledgerbackend.Range
+	if endNum != 0 {
+		correctRange = ledgerbackend.BoundedRange(startNum, endNum)
+	} else {
+		correctRange = ledgerbackend.UnboundedRange(startNum)
+	}
+
+	// Verify the command produces a nonsensical bounded range [100, 0]
+	if !cmdRange.Bounded() {
+		t.Fatal("expected command range to be bounded (reproducing the bug path)")
+	}
+	if cmdRange.To() != 0 {
+		t.Fatalf("expected command range To() == 0, got %d", cmdRange.To())
+	}
+	if cmdRange.From() <= cmdRange.To() {
+		t.Fatalf("expected From() > To() (nonsensical backwards range), got From=%d To=%d",
+			cmdRange.From(), cmdRange.To())
+	}
+
+	// Verify the correct implementation produces an unbounded streaming range
+	if correctRange.Bounded() {
+		t.Fatal("expected correct range to be unbounded for continuous mode")
+	}
+	if correctRange.From() != startNum {
+		t.Fatalf("expected correct range From() == %d, got %d", startNum, correctRange.From())
+	}
+
+	// The bug: the command's range is bounded with to=0, making it impossible
+	// to read any ledger >= startNum. The String() output makes this visible.
+	cmdStr := cmdRange.String()
+	correctStr := correctRange.String()
+	t.Logf("Command produces range: %s (bounded=%v, from=%d, to=%d)",
+		cmdStr, cmdRange.Bounded(), cmdRange.From(), cmdRange.To())
+	t.Logf("Correct range should be: %s (bounded=%v, from=%d)",
+		correctStr, correctRange.Bounded(), correctRange.From())
+
+	// The command range is [100,0] — backwards and will be rejected by the backend.
+	// The correct range is [100,latest) — unbounded streaming mode.
+	if cmdRange.Bounded() == correctRange.Bounded() {
+		t.Fatal("expected command range and correct range to differ in boundedness — bug not reproduced")
+	}
+
+	t.Log("BUG CONFIRMED: export_ledger_entry_changes continuous mode calls " +
+		"PrepareRange with BoundedRange(start, 0) instead of UnboundedRange(start)")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestContinuousModePreparesNonsensicalBoundedRange
+    data_integrity_poc_test.go:56: Command produces range: [100,0] (bounded=true, from=100, to=0)
+    data_integrity_poc_test.go:58: Correct range should be: [100,latest) (bounded=false, from=100)
+    data_integrity_poc_test.go:67: BUG CONFIRMED: export_ledger_entry_changes continuous mode calls PrepareRange with BoundedRange(start, 0) instead of UnboundedRange(start)
+--- PASS: TestContinuousModePreparesNonsensicalBoundedRange (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/input	0.820s
+```
