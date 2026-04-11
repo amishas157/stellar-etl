@@ -1,6 +1,6 @@
 {
-  "hypothesis_viable": 222,
-  "hypothesis_not_viable": 95,
+  "hypothesis_viable": 225,
+  "hypothesis_not_viable": 96,
   "review_viable": 93,
   "review_not_viable": 89,
   "poc_viable": 92,
@@ -8,13 +8,13 @@
   "final_review_viable": 75,
   "final_review_not_viable": 19,
   "final_review_revisions": 2,
-  "condensations": 3,
-  "publishes": 74,
+  "condensations": 4,
+  "publishes": 75,
   "agent_failures": 27,
   "agent_timeouts": 0,
-  "total_spawned": 528,
+  "total_spawned": 531,
   "input_tokens": 0,
-  "output_tokens": 5480223,
+  "output_tokens": 5511872,
   "cache_read_tokens": 0,
   "per_subsystem": {
     "data-integrity": {
@@ -80,14 +80,14 @@
       "final_review_not_viable": 3
     },
     "toid": {
-      "hypothesis_viable": 4,
-      "hypothesis_not_viable": 3,
+      "hypothesis_viable": 7,
+      "hypothesis_not_viable": 4,
       "review_not_viable": 4
     }
   },
   "per_model": {
     "gpt-5.4": {
-      "hypothesis_viable": 222,
+      "hypothesis_viable": 225,
       "agent_failures": 6,
       "final_review_viable": 75,
       "final_review_not_viable": 19,
@@ -104,7 +104,7 @@
   "tokens_by_stage": {
     "hypothesis": {
       "input": 0,
-      "output": 1558959,
+      "output": 1573979,
       "cache_read": 0
     },
     "reviewer": {
@@ -124,19 +124,19 @@
     },
     "publish": {
       "input": 0,
-      "output": 325959,
+      "output": 334597,
       "cache_read": 0
     },
     "condensation": {
       "input": 0,
-      "output": 26170,
+      "output": 34161,
       "cache_read": 0
     }
   },
   "tokens_by_model": {
     "gpt-5.4": {
       "input": 0,
-      "output": 2743044,
+      "output": 2758064,
       "cache_read": 0
     },
     "claude-opus-4-6": {
@@ -146,26 +146,11 @@
     },
     "claude-sonnet-4-6": {
       "input": 0,
-      "output": 352129,
+      "output": 368758,
       "cache_read": 0
     }
   },
   "agent_durations": [
-    [
-      "final_review",
-      "gpt-5.4",
-      161.2
-    ],
-    [
-      "reviewer",
-      "claude-opus-4-6",
-      210.3
-    ],
-    [
-      "publish",
-      "claude-sonnet-4-6",
-      82.6
-    ],
     [
       "reviewer",
       "claude-opus-4-6",
@@ -1150,6 +1135,21 @@
       "reviewer",
       "claude-opus-4-6",
       65.4
+    ],
+    [
+      "publish",
+      "claude-sonnet-4-6",
+      147.3
+    ],
+    [
+      "condensation",
+      "claude-sonnet-4-6",
+      174.4
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      251.8
     ]
   ],
   "costs": {
@@ -1165,29 +1165,29 @@
           },
           "claude-sonnet-4-6": {
             "input_tokens": 0,
-            "output_tokens": 352129,
+            "output_tokens": 368758,
             "cache_read_tokens": 0,
-            "total_cost": 2.31,
-            "premium_requests": 77
+            "total_cost": 2.37,
+            "premium_requests": 79
           },
           "gpt-5.4": {
             "input_tokens": 0,
-            "output_tokens": 2743044,
+            "output_tokens": 2758064,
             "cache_read_tokens": 0,
-            "total_cost": 4.62,
-            "premium_requests": 154
+            "total_cost": 4.65,
+            "premium_requests": 155
           }
         },
-        "provider_cost": 33.48
+        "provider_cost": 33.57
       }
     },
-    "total_cost": 33.48,
+    "total_cost": 33.57,
     "stages": {
       "hypothesis": {
         "copilot": {
           "input_tokens": 0,
-          "output_tokens": 1558959,
-          "premium_requests": 52
+          "output_tokens": 1573979,
+          "premium_requests": 53
         }
       },
       "reviewer": {
@@ -1214,15 +1214,15 @@
       "publish": {
         "copilot": {
           "input_tokens": 0,
-          "output_tokens": 325959,
-          "premium_requests": 74
+          "output_tokens": 334597,
+          "premium_requests": 75
         }
       },
       "condensation": {
         "copilot": {
           "input_tokens": 0,
-          "output_tokens": 26170,
-          "premium_requests": 3
+          "output_tokens": 34161,
+          "premium_requests": 4
         }
       }
     }
