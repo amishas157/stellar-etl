@@ -77,3 +77,134 @@ This breaks null-sensitive analytics. For example, `SELECT COUNT(*) FROM transac
 - **Setup**: Use `makeTransactionTestInput()` to get a classic (non-fee-bump) transaction fixture. Transform it with `TransformTransaction()`.
 - **Steps**: (1) Confirm the JSON-layer output has zero-value fields that would be omitted by `omitempty`. (2) Call `ToParquet()` on the output. (3) Cast the result to `TransactionOutputParquet`.
 - **Assertion**: Assert that `parquet.FeeAccount == ""` and `parquet.NewMaxFee == 0` — demonstrating that absent optional fields are fabricated as concrete values in Parquet output. Contrast this with the JSON behavior where these fields would be omitted entirely.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestTransactionParquetFabricatesOptionalFields"
+**Test Language**: Go
+
+### Demonstration
+
+The test transforms a classic (non-fee-bump, non-muxed) transaction through the production `TransformTransaction()` path, then proves the JSON/Parquet divergence: JSON marshaling correctly omits all 5 optional fields (`account_muxed`, `fee_account`, `fee_account_muxed`, `inner_transaction_hash`, `new_max_fee`) via `omitempty`, but `ToParquet()` fabricates them as concrete `""` and `0` values. This confirms that Parquet consumers receive present-but-empty data where they should see NULL, breaking null-sensitive analytics.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"encoding/json"
+	"testing"
+)
+
+// TestTransactionParquetFabricatesOptionalFields demonstrates that for classic
+// (non-fee-bump, non-muxed) transactions, the Parquet conversion fabricates
+// concrete zero values for fields that the JSON schema correctly omits via omitempty.
+func TestTransactionParquetFabricatesOptionalFields(t *testing.T) {
+	// Step 1: Get a classic (non-fee-bump) transaction from the existing test fixtures
+	hardCodedTransactions, hardCodedHeaders, err := makeTransactionTestInput()
+	if err != nil {
+		t.Fatalf("makeTransactionTestInput() failed: %v", err)
+	}
+
+	// The first transaction in the fixture is a classic (non-fee-bump) transaction
+	classicTx := hardCodedTransactions[0]
+	classicHeader := hardCodedHeaders[0]
+
+	// Verify precondition: this is NOT a fee-bump transaction
+	if classicTx.Envelope.IsFeeBump() {
+		t.Fatal("Expected first test transaction to be classic (non-fee-bump)")
+	}
+
+	// Step 2: Transform the transaction through the production code path
+	output, err := TransformTransaction(classicTx, classicHeader)
+	if err != nil {
+		t.Fatalf("TransformTransaction() failed: %v", err)
+	}
+
+	// Step 3: Verify that the JSON representation correctly omits these fields.
+	// With omitempty, zero-value strings and int64 should not appear in JSON.
+	jsonBytes, err := json.Marshal(output)
+	if err != nil {
+		t.Fatalf("json.Marshal() failed: %v", err)
+	}
+	var jsonMap map[string]interface{}
+	if err := json.Unmarshal(jsonBytes, &jsonMap); err != nil {
+		t.Fatalf("json.Unmarshal() failed: %v", err)
+	}
+
+	// These five fields should be ABSENT from JSON due to omitempty
+	omittedFields := []string{
+		"account_muxed",
+		"fee_account",
+		"fee_account_muxed",
+		"inner_transaction_hash",
+		"new_max_fee",
+	}
+	for _, field := range omittedFields {
+		if _, exists := jsonMap[field]; exists {
+			t.Errorf("JSON output should omit %q for classic transaction, but it is present", field)
+		}
+	}
+
+	// Step 4: Convert to Parquet and verify that these fields are fabricated
+	// as concrete zero values instead of being absent/null.
+	parquetIface := output.ToParquet()
+	parquet, ok := parquetIface.(TransactionOutputParquet)
+	if !ok {
+		t.Fatalf("ToParquet() did not return TransactionOutputParquet, got %T", parquetIface)
+	}
+
+	// These fields should be null/absent for a classic transaction, but Parquet
+	// fabricates concrete zero values — this is the bug.
+	if parquet.AccountMuxed != "" {
+		t.Errorf("Expected AccountMuxed to be empty string (fabricated), got %q", parquet.AccountMuxed)
+	}
+	if parquet.FeeAccount != "" {
+		t.Errorf("Expected FeeAccount to be empty string (fabricated), got %q", parquet.FeeAccount)
+	}
+	if parquet.FeeAccountMuxed != "" {
+		t.Errorf("Expected FeeAccountMuxed to be empty string (fabricated), got %q", parquet.FeeAccountMuxed)
+	}
+	if parquet.InnerTransactionHash != "" {
+		t.Errorf("Expected InnerTransactionHash to be empty string (fabricated), got %q", parquet.InnerTransactionHash)
+	}
+	if parquet.NewMaxFee != 0 {
+		t.Errorf("Expected NewMaxFee to be 0 (fabricated), got %d", parquet.NewMaxFee)
+	}
+
+	// SUMMARY: The JSON output correctly omits these 5 optional fields (via omitempty),
+	// but the Parquet output contains fabricated concrete values ("" and 0).
+	// This means Parquet consumers see present-but-empty data where they should see NULL,
+	// breaking null-sensitive analytics (e.g., COUNT WHERE fee_account IS NOT NULL).
+	t.Logf("BUG CONFIRMED: JSON omits %d optional fields for classic transactions,", len(omittedFields))
+	t.Logf("but Parquet fabricates them as concrete zero values:")
+	t.Logf("  AccountMuxed = %q (should be null)", parquet.AccountMuxed)
+	t.Logf("  FeeAccount = %q (should be null)", parquet.FeeAccount)
+	t.Logf("  FeeAccountMuxed = %q (should be null)", parquet.FeeAccountMuxed)
+	t.Logf("  InnerTransactionHash = %q (should be null)", parquet.InnerTransactionHash)
+	t.Logf("  NewMaxFee = %d (should be null)", parquet.NewMaxFee)
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestTransactionParquetFabricatesOptionalFields
+    data_integrity_poc_test.go:88: BUG CONFIRMED: JSON omits 5 optional fields for classic transactions,
+    data_integrity_poc_test.go:89: but Parquet fabricates them as concrete zero values:
+    data_integrity_poc_test.go:90:   AccountMuxed = "" (should be null)
+    data_integrity_poc_test.go:91:   FeeAccount = "" (should be null)
+    data_integrity_poc_test.go:92:   FeeAccountMuxed = "" (should be null)
+    data_integrity_poc_test.go:93:   InnerTransactionHash = "" (should be null)
+    data_integrity_poc_test.go:94:   NewMaxFee = 0 (should be null)
+--- PASS: TestTransactionParquetFabricatesOptionalFields (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.916s
+```
