@@ -277,3 +277,195 @@ For the next PoC attempt:
 - The code path is real: `exportTransformedData()` opens the JSON file with `MustOutFile()` and writes entries with `ExportEntry()` before calling `MaybeUpload()`, with no `outFile.Close()` in that function.
 - The missing close is a structural outlier relative to sibling export commands, which do call `outFile.Close()` before upload.
 - No documentation or inline comment reviewed during final review established that this ordering is intentional.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: cmd/data_integrity_poc_test.go
+**Test Name**: "TestExportTransformedDataLeaksFileDescriptors" and "TestExportTransformedDataFDsRecoveredOnlyByGC"
+**Test Language**: Go
+
+### Demonstration
+
+Two functional tests demonstrate measurable file descriptor accumulation caused by the missing `Close()` in `exportTransformedData`. `TestExportTransformedDataLeaksFileDescriptors` calls the production function with 3 resource types, measures the process FD count before and after via `/dev/fd`, and proves 6 FDs leak (2 per resource — one from `createOutputFile` and one from `MustOutFile`, neither closed). `TestExportTransformedDataFDsRecoveredOnlyByGC` goes further: it shows the leaked FDs are only recovered when Go's garbage collector runs finalizers, proving the FD lifecycle is accidentally delegated to the GC rather than handled by explicit `Close()`. This means close-time I/O errors (NFS writeback, disk-full) are silently suppressed since finalizer-invoked `Close()` discards errors.
+
+### Test Body
+
+```go
+package cmd
+
+import (
+	"os"
+	"runtime"
+	"runtime/debug"
+	"testing"
+
+	"github.com/stellar/stellar-etl/v2/internal/transform"
+)
+
+// TestExportTransformedDataLeaksFileDescriptors demonstrates that
+// exportTransformedData in export_ledger_entry_changes.go opens files via
+// MustOutFile() but never calls outFile.Close(), causing file descriptor
+// accumulation at the OS level. This is a functional test — not source
+// scanning — that measures actual FD leak through the production code path.
+//
+// The missing Close() has three consequences:
+//  1. File descriptors accumulate until Go's GC finalizer reclaims them
+//  2. Close-time I/O errors (e.g. NFS writeback, disk-full) are silently lost
+//  3. When MaybeUpload calls deleteLocalFiles, the FDs become zombies
+//
+// All 9 sibling export commands call outFile.Close() before MaybeUpload().
+func TestExportTransformedDataLeaksFileDescriptors(t *testing.T) {
+	// Disable automatic GC so os.File finalizers don't close leaked FDs
+	// during our measurement window.
+	oldGCPercent := debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(oldGCPercent)
+
+	// Run GC twice to flush any pre-existing unreachable os.File objects
+	// and their finalizers, establishing a clean FD baseline.
+	runtime.GC()
+	runtime.GC()
+
+	tmpDir := t.TempDir()
+
+	fdsBefore := countOpenFDs(t)
+
+	// Call the production function with 3 resource types.
+	// Each resource type opens one file via MustOutFile().
+	// No cloud provider → MaybeUpload is a no-op (returns early).
+	transformedOutput := map[string][]interface{}{
+		"accounts": {
+			transform.AccountOutput{AccountID: "GABC", Balance: 100.0},
+		},
+		"offers": {
+			transform.OfferOutput{SellerID: "GABC", OfferID: 1},
+		},
+		"trustlines": {
+			transform.TrustlineOutput{AccountID: "GABC"},
+		},
+	}
+	numResources := len(transformedOutput)
+
+	err := exportTransformedData(
+		1, 10,
+		tmpDir,
+		tmpDir,
+		transformedOutput,
+		"", "", "", // no cloud credentials — MaybeUpload is a no-op
+		nil,
+		false, // no parquet
+	)
+	if err != nil {
+		t.Fatalf("exportTransformedData returned error: %v", err)
+	}
+
+	fdsAfter := countOpenFDs(t)
+	leaked := fdsAfter - fdsBefore
+
+	if leaked < numResources {
+		t.Fatalf("Expected at least %d leaked FDs (one per resource type), but only %d extra FDs detected "+
+			"(before=%d, after=%d). The bug may have been fixed — files are now properly closed.",
+			numResources, leaked, fdsBefore, fdsAfter)
+	}
+
+	t.Logf("BUG CONFIRMED: %d file descriptors leaked after processing %d resource types (before=%d, after=%d)",
+		leaked, numResources, fdsBefore, fdsAfter)
+	t.Logf("Leaked FDs remain open until Go's GC finalizer runs, at which point close-time errors are silently discarded")
+}
+
+// TestExportTransformedDataFDsRecoveredOnlyByGC demonstrates that the FDs
+// leaked by exportTransformedData are only recovered when Go's garbage
+// collector runs finalizers — not by any explicit cleanup in the function.
+// This proves the FD lifecycle is accidentally delegated to the GC.
+func TestExportTransformedDataFDsRecoveredOnlyByGC(t *testing.T) {
+	// Phase 1: Leak FDs (with GC disabled)
+	oldGCPercent := debug.SetGCPercent(-1)
+	runtime.GC()
+	runtime.GC()
+
+	tmpDir := t.TempDir()
+
+	fdsBefore := countOpenFDs(t)
+
+	transformedOutput := map[string][]interface{}{
+		"accounts": {
+			transform.AccountOutput{AccountID: "GABC", Balance: 100.0},
+		},
+		"offers": {
+			transform.OfferOutput{SellerID: "GABC", OfferID: 1},
+		},
+		"trustlines": {
+			transform.TrustlineOutput{AccountID: "GABC"},
+		},
+	}
+
+	err := exportTransformedData(1, 10, tmpDir, tmpDir, transformedOutput, "", "", "", nil, false)
+	if err != nil {
+		t.Fatalf("exportTransformedData failed: %v", err)
+	}
+
+	fdsAfterCall := countOpenFDs(t)
+	leakedBeforeGC := fdsAfterCall - fdsBefore
+
+	if leakedBeforeGC < len(transformedOutput) {
+		t.Fatalf("Precondition failed: expected FD leak but only %d extra FDs (before=%d, after=%d)",
+			leakedBeforeGC, fdsBefore, fdsAfterCall)
+	}
+
+	t.Logf("Phase 1: %d FDs leaked (before=%d, after=%d)", leakedBeforeGC, fdsBefore, fdsAfterCall)
+
+	// Phase 2: Re-enable GC and force collection. The os.File finalizers
+	// should close the leaked FDs, reducing the count.
+	debug.SetGCPercent(oldGCPercent)
+	runtime.GC()
+	runtime.GC()
+
+	fdsAfterGC := countOpenFDs(t)
+	recoveredByGC := fdsAfterCall - fdsAfterGC
+
+	if recoveredByGC <= 0 {
+		t.Fatalf("Expected GC to recover leaked FDs, but FD count did not decrease (afterCall=%d, afterGC=%d)",
+			fdsAfterCall, fdsAfterGC)
+	}
+
+	t.Logf("Phase 2: GC recovered %d FDs (afterCall=%d, afterGC=%d)", recoveredByGC, fdsAfterCall, fdsAfterGC)
+	t.Logf("BUG CONFIRMED: exportTransformedData relies on GC finalizers for file cleanup instead of explicit Close()")
+}
+
+// countOpenFDs returns the number of open file descriptors for the current process.
+// Uses Readdirnames (not ReadDir/Lstat) to avoid races with transient FDs.
+// Works on macOS (/dev/fd) and Linux (/dev/fd or /proc/self/fd).
+func countOpenFDs(t *testing.T) int {
+	t.Helper()
+	f, err := os.Open("/dev/fd")
+	if err != nil {
+		t.Fatalf("cannot open /dev/fd: %v", err)
+	}
+	defer f.Close()
+	names, err := f.Readdirnames(-1)
+	if err != nil {
+		t.Fatalf("cannot read /dev/fd entries: %v", err)
+	}
+	return len(names)
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestExportTransformedDataLeaksFileDescriptors
+    data_integrity_poc_test.go:77: BUG CONFIRMED: 6 file descriptors leaked after processing 3 resource types (before=6, after=12)
+    data_integrity_poc_test.go:79: Leaked FDs remain open until Go's GC finalizer runs, at which point close-time errors are silently discarded
+--- PASS: TestExportTransformedDataLeaksFileDescriptors (0.00s)
+=== RUN   TestExportTransformedDataFDsRecoveredOnlyByGC
+    data_integrity_poc_test.go:121: Phase 1: 6 FDs leaked (before=6, after=12)
+    data_integrity_poc_test.go:137: Phase 2: GC recovered 6 FDs (afterCall=12, afterGC=6)
+    data_integrity_poc_test.go:138: BUG CONFIRMED: exportTransformedData relies on GC finalizers for file cleanup instead of explicit Close()
+--- PASS: TestExportTransformedDataFDsRecoveredOnlyByGC (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/cmd	2.074s
+```
