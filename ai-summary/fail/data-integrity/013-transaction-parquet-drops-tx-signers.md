@@ -140,3 +140,35 @@ func TestTransactionParquetDropsTxSigners(t *testing.T) {
 FAIL
 FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.757s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-11
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Exercises claimed issue**: PARTIAL — the PoC does show that `TransactionOutput.ToParquet()` returns a `TransactionOutputParquet` value with no `TxSigners` field, and the export command writes Parquet through that conversion path. But the test never writes a Parquet file or uses a real transformed transaction.
+2. **Realistic preconditions**: YES — any signed transaction follows the same transform and Parquet conversion path.
+3. **Bug vs by-design**: BY DESIGN / NOT PROVEN — this codebase already keeps JSON and Parquet schemas non-identical. `OperationDetailsJSON`, `BalanceIDStrkey`, `PoolIDStrkey`, `LiquidityPoolIDStrkey`, and `SellingLiquidityPoolIDStrkey` exist on JSON-side structs without Parquet counterparts, ClaimableBalance has no Parquet struct at all, and there is no README/docs contract promising `tx_signers` in Parquet output.
+4. **Impact vs severity**: OVERSTATED — the hypothesis frames this as loss of signer provenance, but `getTxSigners()` does not recover signer account IDs. It encodes raw signature payload bytes as account strings, so the omitted field is not reliable signer provenance in the first place.
+5. **In scope**: NO — without evidence that Parquet promised a `tx_signers` column or that JSON and Parquet are intended to be schema-identical, this is a schema discrepancy / feature omission rather than demonstrated silent data corruption.
+6. **Test correctness**: PARTIAL — the PoC hand-builds a `TransactionOutput` and relies on reflection plus field-count mismatch. In this repository field-count mismatch is not a valid corruption oracle because several JSON-only convenience fields are already intentionally absent from Parquet.
+7. **Alternative explanations**: PRESENT — the simpler explanation is an intentional JSON/Parquet schema split plus omission of a field that is already semantically broken on the JSON side.
+8. **Novelty**: NOT ASSESSED — duplicate handling belongs to the orchestrator.
+
+### Rejection Reason
+
+The PoC proves only that `TransactionOutputParquet` omits `TxSigners`; it does not prove silent data corruption. In this repository Parquet schemas already omit several JSON-only convenience fields, and the supposedly lost `tx_signers` data is itself not valid signer provenance because it is derived from signature payload bytes rather than signer account IDs.
+
+### Failed Checks
+
+- 3. Is the behavior a bug or by design?
+- 4. Does the impact match the claimed severity?
+- 5. Is the finding in scope?
+- 6. Is the test itself correct?
+- 7. Can the results be explained WITHOUT the claimed issue?
