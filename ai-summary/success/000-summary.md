@@ -45,3 +45,4 @@
 - `export-pipeline/012-transaction-parquet-drops-tx-signers.md` — High — transaction Parquet export omits populated `tx_signers` from every row
 - `export-pipeline/013-contract-event-parquet-operation-id-dropped.md` — High — contract event Parquet conversion zeroes populated `operation_id` values
 - `export-pipeline/014-contract-code-parquet-drops-ledger-key-hash-base64.md` — High — contract-code Parquet export drops populated `ledger_key_hash_base_64` from every contract-code row
+- `data-integrity/011-ledger-transaction-parquet-request-silently-ignored.md` — Medium — `export_ledger_transaction --write-parquet` exits successfully, writes JSON, and silently skips the requested parquet artifact
