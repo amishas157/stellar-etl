@@ -56,6 +56,7 @@
 - `data-transform/015-create-contract-ignores-executable-wasm-hash.md` — High — `create_contract` and `create_contract_v2` export the first footprint code hash instead of the operation executable Wasm hash
 - `data-transform/016-claimable-balance-inline-float64-rounding.md` — Critical — claimable-balance export bypasses the shared stroop converter and writes the wrong JSON number for large balances
 - `data-transform/017-liquidity-pool-deposit-detail-float64-rounding.md` — Critical — liquidity-pool deposit details round large reserve deltas and share amounts
+- `data-transform/018-transaction-parquet-drops-tx-signers.md` — High — transaction Parquet export omits populated `tx_signers` from every row
 - `utilities/002-added-signers-are-mislabeled-as-updated.md` — High — `account_signers` exports newly added signer rows as `UPDATED` instead of `CREATED`
 - `data-input/005-contract-events-limit-counts-transactions-instead-of-contract-event-rows.md` — Medium — `export_contract_events --limit` counts transactions before emitted contract-event rows and can return empty or oversized exports
 - `data-input/006-token-transfer-limit-counts-ledgers-instead-of-token-transfer-rows.md` — Medium — `export_token_transfer --limit` counts ledgers before emitted token-transfer rows and can return empty or oversized exports
