@@ -111,3 +111,57 @@ The root cause is a mismatch between Go field types and parquet-go's tag-based s
   2. Alternatively, create a local parquet file writer and call `writer.NewParquetWriter(pf, new(transform.ContractEventOutputParquet), 1)` and assert error is non-nil
   3. Verify the error message contains "not a valid Type string"
 - **Assertion**: `require.Error(t, err)` and `require.Contains(t, err.Error(), "not a valid Type string")` — the schema cannot be created, so no Parquet file can be produced for contract events
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestContractEventParquetSchemaInvalid"
+**Test Language**: Go
+
+### Demonstration
+
+The test calls `schema.NewSchemaHandlerFromStruct(new(ContractEventOutputParquet))` — the exact same code path that `WriteParquet()` triggers — and confirms it returns an error containing "not a valid Type string". This proves that `export_contract_events --write-parquet` cannot initialize a Parquet writer and will fatal before writing any rows, resulting in complete data loss for contract event Parquet exports.
+
+### Test Body
+
+```go
+func TestContractEventParquetSchemaInvalid(t *testing.T) {
+	// 1. Attempt to create a schema handler from ContractEventOutputParquet
+	_, err := schema.NewSchemaHandlerFromStruct(new(ContractEventOutputParquet))
+
+	// 2. Assert that schema creation fails
+	if err == nil {
+		t.Fatal("Expected schema creation to fail for ContractEventOutputParquet, but it succeeded")
+	}
+
+	// 3. Verify the error is about invalid type string
+	if !strings.Contains(err.Error(), "not a valid Type string") {
+		t.Fatalf("Expected error about 'not a valid Type string', got: %v", err)
+	}
+
+	t.Logf("BUG CONFIRMED: ContractEventOutputParquet cannot create a Parquet writer")
+	t.Logf("Schema error: %v", err)
+	t.Logf("The []interface{} fields (Topics, TopicsDecoded) use type=BYTE_ARRAY but lack valuetype=BYTE_ARRAY,")
+	t.Logf("causing parquet-go to derive an empty type string for the LIST child element.")
+	t.Logf("This means 'export_contract_events --write-parquet' fatals before writing any rows.")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestContractEventParquetSchemaInvalid
+    data_integrity_poc_test.go:275: BUG CONFIRMED: ContractEventOutputParquet cannot create a Parquet writer
+    data_integrity_poc_test.go:276: Schema error: failed to create schema from tag map: type : not a valid Type string
+    data_integrity_poc_test.go:277: The []interface{} fields (Topics, TopicsDecoded) use type=BYTE_ARRAY but lack valuetype=BYTE_ARRAY,
+    data_integrity_poc_test.go:278: causing parquet-go to derive an empty type string for the LIST child element.
+    data_integrity_poc_test.go:279: This means 'export_contract_events --write-parquet' fatals before writing any rows.
+--- PASS: TestContractEventParquetSchemaInvalid (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.893s
+```
