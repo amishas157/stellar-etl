@@ -9,12 +9,12 @@
   "final_review_not_viable": 18,
   "final_review_revisions": 1,
   "condensations": 3,
-  "publishes": 73,
+  "publishes": 74,
   "agent_failures": 23,
   "agent_timeouts": 0,
-  "total_spawned": 505,
+  "total_spawned": 506,
   "input_tokens": 0,
-  "output_tokens": 5000931,
+  "output_tokens": 5006539,
   "cache_read_tokens": 0,
   "per_subsystem": {
     "data-integrity": {
@@ -123,7 +123,7 @@
     },
     "publish": {
       "input": 0,
-      "output": 320351,
+      "output": 325959,
       "cache_read": 0
     },
     "condensation": {
@@ -145,16 +145,11 @@
     },
     "claude-sonnet-4-6": {
       "input": 0,
-      "output": 346521,
+      "output": 352129,
       "cache_read": 0
     }
   },
   "agent_durations": [
-    [
-      "reviewer",
-      "claude-opus-4-6",
-      134.4
-    ],
     [
       "publish",
       "claude-sonnet-4-6",
@@ -1149,6 +1144,11 @@
       "reviewer",
       "claude-opus-4-6",
       209.1
+    ],
+    [
+      "publish",
+      "claude-sonnet-4-6",
+      107.5
     ]
   ],
   "costs": {
@@ -1164,10 +1164,10 @@
           },
           "claude-sonnet-4-6": {
             "input_tokens": 0,
-            "output_tokens": 346521,
+            "output_tokens": 352129,
             "cache_read_tokens": 0,
-            "total_cost": 2.28,
-            "premium_requests": 76
+            "total_cost": 2.31,
+            "premium_requests": 77
           },
           "gpt-5.4": {
             "input_tokens": 0,
@@ -1177,10 +1177,10 @@
             "premium_requests": 146
           }
         },
-        "provider_cost": 31.95
+        "provider_cost": 31.98
       }
     },
-    "total_cost": 31.95,
+    "total_cost": 31.98,
     "stages": {
       "hypothesis": {
         "copilot": {
@@ -1213,8 +1213,8 @@
       "publish": {
         "copilot": {
           "input_tokens": 0,
-          "output_tokens": 320351,
-          "premium_requests": 73
+          "output_tokens": 325959,
+          "premium_requests": 74
         }
       },
       "condensation": {
