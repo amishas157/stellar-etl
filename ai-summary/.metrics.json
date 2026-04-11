@@ -1,6 +1,6 @@
 {
-  "hypothesis_viable": 267,
-  "hypothesis_not_viable": 131,
+  "hypothesis_viable": 269,
+  "hypothesis_not_viable": 133,
   "review_viable": 115,
   "review_not_viable": 109,
   "poc_viable": 114,
@@ -9,12 +9,12 @@
   "final_review_not_viable": 22,
   "final_review_revisions": 6,
   "condensations": 5,
-  "publishes": 90,
+  "publishes": 91,
   "agent_failures": 32,
   "agent_timeouts": 0,
-  "total_spawned": 652,
+  "total_spawned": 654,
   "input_tokens": 0,
-  "output_tokens": 7068387,
+  "output_tokens": 7128119,
   "cache_read_tokens": 0,
   "per_subsystem": {
     "data-integrity": {
@@ -72,8 +72,8 @@
       "final_review_not_viable": 5
     },
     "data-input": {
-      "hypothesis_viable": 18,
-      "hypothesis_not_viable": 9,
+      "hypothesis_viable": 20,
+      "hypothesis_not_viable": 11,
       "review_not_viable": 8,
       "review_viable": 10,
       "poc_viable": 10,
@@ -91,7 +91,7 @@
   },
   "per_model": {
     "gpt-5.4": {
-      "hypothesis_viable": 267,
+      "hypothesis_viable": 269,
       "agent_failures": 8,
       "final_review_viable": 91,
       "final_review_not_viable": 22,
@@ -108,7 +108,7 @@
   "tokens_by_stage": {
     "hypothesis": {
       "input": 0,
-      "output": 2147267,
+      "output": 2201410,
       "cache_read": 0
     },
     "reviewer": {
@@ -128,7 +128,7 @@
     },
     "publish": {
       "input": 0,
-      "output": 399896,
+      "output": 405485,
       "cache_read": 0
     },
     "condensation": {
@@ -140,7 +140,7 @@
   "tokens_by_model": {
     "gpt-5.4": {
       "input": 0,
-      "output": 3652694,
+      "output": 3706837,
       "cache_read": 0
     },
     "claude-opus-4-6": {
@@ -150,21 +150,11 @@
     },
     "claude-sonnet-4-6": {
       "input": 0,
-      "output": 448002,
+      "output": 453591,
       "cache_read": 0
     }
   },
   "agent_durations": [
-    [
-      "reviewer",
-      "claude-opus-4-6",
-      216.9
-    ],
-    [
-      "publish",
-      "claude-sonnet-4-6",
-      116.9
-    ],
     [
       "poc",
       "claude-opus-4-6",
@@ -1154,6 +1144,16 @@
       "final_review",
       "gpt-5.4",
       187.9
+    ],
+    [
+      "publish",
+      "claude-sonnet-4-6",
+      126.7
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      931.7
     ]
   ],
   "costs": {
@@ -1169,29 +1169,29 @@
           },
           "claude-sonnet-4-6": {
             "input_tokens": 0,
-            "output_tokens": 448002,
+            "output_tokens": 453591,
             "cache_read_tokens": 0,
-            "total_cost": 2.85,
-            "premium_requests": 95
+            "total_cost": 2.88,
+            "premium_requests": 96
           },
           "gpt-5.4": {
             "input_tokens": 0,
-            "output_tokens": 3652694,
+            "output_tokens": 3706837,
             "cache_read_tokens": 0,
-            "total_cost": 5.79,
-            "premium_requests": 193
+            "total_cost": 5.82,
+            "premium_requests": 194
           }
         },
-        "provider_cost": 41.22
+        "provider_cost": 41.28
       }
     },
-    "total_cost": 41.22,
+    "total_cost": 41.28,
     "stages": {
       "hypothesis": {
         "copilot": {
           "input_tokens": 0,
-          "output_tokens": 2147267,
-          "premium_requests": 66
+          "output_tokens": 2201410,
+          "premium_requests": 67
         }
       },
       "reviewer": {
@@ -1218,8 +1218,8 @@
       "publish": {
         "copilot": {
           "input_tokens": 0,
-          "output_tokens": 399896,
-          "premium_requests": 90
+          "output_tokens": 405485,
+          "premium_requests": 91
         }
       },
       "condensation": {
