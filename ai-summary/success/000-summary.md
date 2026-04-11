@@ -57,3 +57,4 @@
 - `data-transform/016-claimable-balance-inline-float64-rounding.md` — Critical — claimable-balance export bypasses the shared stroop converter and writes the wrong JSON number for large balances
 - `data-transform/017-liquidity-pool-deposit-detail-float64-rounding.md` — Critical — liquidity-pool deposit details round large reserve deltas and share amounts
 - `utilities/002-added-signers-are-mislabeled-as-updated.md` — High — `account_signers` exports newly added signer rows as `UPDATED` instead of `CREATED`
+- `data-input/005-contract-events-limit-counts-transactions-instead-of-contract-event-rows.md` — Medium — `export_contract_events --limit` counts transactions before emitted contract-event rows and can return empty or oversized exports
