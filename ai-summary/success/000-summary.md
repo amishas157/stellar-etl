@@ -39,3 +39,4 @@
 - `data-integrity/005-config-parallel-compute-empty-shell.md` — High — config-setting export drops `ledger_max_dependent_tx_clusters` from `CONFIG_SETTING_CONTRACT_PARALLEL_COMPUTE_V0`
 - `data-integrity/006-eviction-iterator-empty-shell.md` — High — config-setting export drops `bucket_list_level`, `is_curr_bucket`, and `bucket_file_offset` from `CONFIG_SETTING_EVICTION_ITERATOR`
 - `data-integrity/007-contract-event-parquet-schema-invalid.md` — Medium — `export_contract_events --write-parquet` cannot initialize its Parquet writer because `ContractEventOutputParquet` uses invalid repeated-field schema tags
+- `data-integrity/008-contract-data-parquet-schema-invalid.md` — Medium — `export_ledger_entry_changes --export-contract-data --write-parquet` cannot initialize its Parquet writer because `ContractDataOutputParquet` uses invalid `MAP` schema tags on dynamic payload fields
