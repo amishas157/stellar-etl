@@ -35,3 +35,30 @@ The helper's own comment says it searches for the ledger "closed on or directly 
 ## Anti-Evidence
 
 If the command were intentionally documented as returning the smallest ledger range that merely *brackets* the requested timestamps, then a rounded-up end ledger could be defended as superset behavior. The current help text and downstream export usage do not make that superset contract explicit, so the present behavior still looks like silent overexport rather than intentional padding.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE — duplicate of 021-end-time-rounds-up-to-the-next-ledger.md
+**Date**: 2026-04-11
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of ai-summary/fail/data-input/021-end-time-rounds-up-to-the-next-ledger.md
+**Failed At**: reviewer
+
+### Trace Summary
+
+This hypothesis is substantively identical to the previously investigated and rejected hypothesis in `ai-summary/fail/data-input/021-end-time-rounds-up-to-the-next-ledger.md`. Both claim that `findLedgerForDate()` ceiling semantics are wrong for the end boundary. The prior review confirmed that the README (line 333) explicitly documents the contract as "the smallest possible ledger range that completely covers the provided time period," making ceiling semantics for both boundaries the correct implementation.
+
+### Code Paths Examined
+
+- `internal/input/ledger_range.go:GetLedgerRange:32-67` — same code path as prior investigation
+- `internal/input/ledger_range.go:findLedgerForDate:142-160` — same ceiling predicate as prior investigation
+
+### Why It Failed
+
+Exact duplicate of a previously investigated hypothesis. The prior review (021) conclusively determined this is working-as-designed behavior per the README's "completely covers" contract.
+
+### Lesson Learned
+
+Check the fail directory for prior investigations before re-submitting the same hypothesis with identical mechanism and target code.
