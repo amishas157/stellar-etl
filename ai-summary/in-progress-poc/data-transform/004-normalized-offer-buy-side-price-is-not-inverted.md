@@ -197,3 +197,44 @@ func TestBuySideNormalizedOfferFieldsAreSwapped(t *testing.T) {
 PASS
 ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.626s
 ```
+
+---
+
+## Final Review — Needs Revision
+
+**Date**: 2026-04-11
+**Final review by**: gpt-5.4, high
+
+### What Needs Fixing
+
+The reproduced behavior is real, but the finding is framed too narrowly. `extractDimOffer()` does not leave `base_amount` and `counter_amount` canonical while only exporting `price` in the wrong units; for buy-side rows it misorients all three derived fields together.
+
+That matters because the current PoC only passes by proving the broader row-orientation bug:
+
+- `BaseAmount` is the sold counter quantity, not the canonical base quantity
+- `CounterAmount` is the bought base quantity, not the canonical counter quantity
+- `Price` stays in `buying/selling` units because the whole row still follows raw offer orientation
+
+So the current write-up overstates the independence of the `price` symptom. The observed `price` value can be explained entirely by the already-demonstrated fact that buy-side normalized rows are not converted into canonical base/counter orientation at all.
+
+### Revision Instructions
+
+Revise this into one of these two shapes:
+
+1. Reframe it as the broader buy-side canonicalization bug in `extractDimOffer()`, with `price` documented as an additional affected field alongside `base_amount` and `counter_amount`.
+2. If you want to keep a price-specific finding, show a distinct, standalone defect in `price` after assuming the amount fields are already corrected/canonicalized. The current PoC does not do that.
+
+Any revised PoC should explicitly say that `TransformOffer()` exposes:
+
+- `offer.Amount` as the selling-asset quantity
+- `offer.Price` as `buying / selling`
+
+and then explain that `extractDimOffer()` fails to remap those raw offer-side values into canonical `DimMarket` base/counter units when `action = "b"`.
+
+### Checks Passed So Far
+
+- **Exercises claimed code path**: PASS — the PoC runs the real `TransformOfferNormalized()` -> `extractDimOffer()` path.
+- **Realistic preconditions**: PASS — any offer whose selling asset sorts after its buying asset becomes `action = "b"` and hits this path.
+- **Bug vs. by-design**: PASS — the schema names and market canonicalization make mixed-unit buy-side rows a bug, not an intentional contract.
+- **In scope**: PASS — this is a concrete data-integrity issue in `internal/transform/`.
+- **Test correctness**: PASS with revision caveat — the test demonstrates wrong exported values, but it demonstrates the broader buy-side field misorientation rather than an isolated price-only defect.
