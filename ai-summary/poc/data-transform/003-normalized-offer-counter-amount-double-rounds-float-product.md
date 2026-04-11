@@ -87,3 +87,119 @@ This matches the pattern of VIABLE finding success/data-transform/016 (claimable
 - **Steps**: Extract `Offer.CounterAmount` from the result. Compute the exact rational product `big.Rat(Amount*PriceN, 1e7*PriceD).Float64()`.
 - **Assertion**: Assert that `Offer.CounterAmount` equals the exact rational product. Currently it does not — the current code produces `4204b66dc015e19b` while the exact result is `4204b66dc015e19c` (1 ULP off, ~14.6 stroops).
 - **Fix verification**: Change `offer_normalized.go:166` from `float64(offer.Amount) * offer.Price` to `offer.Amount * float64(offer.PriceN) / float64(offer.PriceD)` and verify the assertion passes.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestNormalizedOfferCounterAmountDoubleRoundsFloatProduct"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs an offer with `Amount = 9007199254740993` stroops and `Price = 123456789/10000000`, runs it through the full `TransformOfferNormalized()` production code path, then compares the output `CounterAmount` against the exact rational product computed via `big.Rat`. The current code produces `CounterAmount` with float64 bits `4204b66dc015e19b` while the exact value has bits `4204b66dc015e19c` — a 1 ULP difference caused by multiplying two pre-rounded floats instead of using the exact integer price components already available in the `OfferOutput` struct.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"math"
+	"math/big"
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/ingest"
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestNormalizedOfferCounterAmountDoubleRoundsFloatProduct demonstrates that
+// extractDimOffer computes CounterAmount by multiplying two pre-rounded float64
+// values (offer.Amount * offer.Price) instead of using the exact rational inputs.
+// This double-rounding produces an incorrect counter_amount for large offers.
+func TestNormalizedOfferCounterAmountDoubleRoundsFloatProduct(t *testing.T) {
+	// Trigger values from the hypothesis
+	var amount xdr.Int64 = 9007199254740993
+	var priceN xdr.Int32 = 123456789
+	var priceD xdr.Int32 = 10000000
+
+	// Construct an offer with these values
+	change := ingest.Change{
+		ChangeType: xdr.LedgerEntryChangeTypeLedgerEntryCreated,
+		Type:       xdr.LedgerEntryTypeOffer,
+		Pre:        nil,
+		Post: &xdr.LedgerEntry{
+			LastModifiedLedgerSeq: xdr.Uint32(100),
+			Data: xdr.LedgerEntryData{
+				Type: xdr.LedgerEntryTypeOffer,
+				Offer: &xdr.OfferEntry{
+					SellerId: testAccount1ID,
+					OfferId:  999,
+					Selling:  nativeAsset,
+					Buying:   ethAsset,
+					Amount:   amount,
+					Price: xdr.Price{
+						N: priceN,
+						D: priceD,
+					},
+					Flags: 0,
+				},
+			},
+		},
+	}
+
+	result, err := TransformOfferNormalized(change, 100)
+	if err != nil {
+		t.Fatalf("TransformOfferNormalized failed: %v", err)
+	}
+
+	gotCounterAmount := result.Offer.CounterAmount
+
+	// Compute the exact rational product: (Amount / 1e7) * (PriceN / PriceD)
+	// = Amount * PriceN / (1e7 * PriceD)
+	num := new(big.Int).Mul(big.NewInt(int64(amount)), big.NewInt(int64(priceN)))
+	den := new(big.Int).Mul(big.NewInt(1e7), big.NewInt(int64(priceD)))
+	exactRat := new(big.Rat).SetFrac(num, den)
+	exactFloat, _ := exactRat.Float64()
+
+	// Compare bit patterns to detect the 1-ULP drift
+	gotBits := math.Float64bits(gotCounterAmount)
+	exactBits := math.Float64bits(exactFloat)
+
+	t.Logf("Amount (stroops): %d", amount)
+	t.Logf("PriceN: %d, PriceD: %d", priceN, priceD)
+	t.Logf("Current CounterAmount:  %.20f (bits: %016x)", gotCounterAmount, gotBits)
+	t.Logf("Exact rational float64: %.20f (bits: %016x)", exactFloat, exactBits)
+	t.Logf("ULP difference: %d", int64(exactBits)-int64(gotBits))
+
+	// Assert output matches the exact rational value.
+	// If this fails, the double-rounding bug is proven.
+	if gotBits != exactBits {
+		t.Errorf("CounterAmount corrupted by double-rounding: off by %d ULP(s)\n"+
+			"  got  bits %016x = %.20f\n"+
+			"  want bits %016x = %.20f",
+			int64(exactBits)-int64(gotBits), gotBits, gotCounterAmount, exactBits, exactFloat)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestNormalizedOfferCounterAmountDoubleRoundsFloatProduct
+    data_integrity_poc_test.go:65: Amount (stroops): 9007199254740993
+    data_integrity_poc_test.go:66: PriceN: 123456789, PriceD: 10000000
+    data_integrity_poc_test.go:67: Current CounterAmount:  11119998978.73515892028808593750 (bits: 4204b66dc015e19b)
+    data_integrity_poc_test.go:68: Exact rational float64: 11119998978.73516082763671875000 (bits: 4204b66dc015e19c)
+    data_integrity_poc_test.go:69: ULP difference: 1
+    data_integrity_poc_test.go:72: CounterAmount corrupted by double-rounding: off by 1 ULP(s)
+      got  bits 4204b66dc015e19b = 11119998978.73515892028808593750
+      want bits 4204b66dc015e19c = 11119998978.73516082763671875000
+--- FAIL: TestNormalizedOfferCounterAmountDoubleRoundsFloatProduct (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.783s
+```
