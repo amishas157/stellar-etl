@@ -81,3 +81,133 @@ This is Pattern 2 (Parquet field mapping omission). The field contains the base6
 - **Setup**: Create a `ContractDataOutput` and `ContractCodeOutput` with non-empty `LedgerKeyHashBase64` values (use values from existing test fixtures: `"AAAABg..."` and `"AAAABw..."`)
 - **Steps**: Call `.ToParquet()` on each, cast result to the parquet struct type
 - **Assertion**: Assert that the returned parquet struct contains a `LedgerKeyHashBase64` field with the same value. Currently this will fail because the field does not exist on the parquet struct. The fix requires adding `LedgerKeyHashBase64 string` to both `ContractDataOutputParquet` and `ContractCodeOutputParquet` in `schema_parquet.go`, and adding the field mapping in both `ToParquet()` methods in `parquet_converter.go`.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestContractDataParquetDropsLedgerKeyHashBase64" and "TestContractCodeParquetDropsLedgerKeyHashBase64"
+**Test Language**: Go
+
+### Demonstration
+
+Both tests confirm that `LedgerKeyHashBase64` exists on the JSON output structs (`ContractDataOutput` and `ContractCodeOutput`) but is completely absent from their parquet counterparts (`ContractDataOutputParquet` and `ContractCodeOutputParquet`). When `ToParquet()` is called, the base64-encoded ledger key is silently discarded because the destination struct has no field to receive it. This means any parquet export of contract data or contract code loses the serialized ledger key that JSON exports preserve.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"reflect"
+	"testing"
+	"time"
+)
+
+// TestContractDataParquetDropsLedgerKeyHashBase64 demonstrates that
+// ContractDataOutput.ToParquet() silently drops the LedgerKeyHashBase64 field
+// because ContractDataOutputParquet has no corresponding field.
+// A PASSING test confirms the bug: parquet output loses the base64 ledger key.
+func TestContractDataParquetDropsLedgerKeyHashBase64(t *testing.T) {
+	// 1. Construct input with a non-empty LedgerKeyHashBase64
+	input := ContractDataOutput{
+		ContractId:          "CABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV",
+		LedgerKeyHash:       "abc123hash",
+		LedgerKeyHashBase64: "AAAABgAAAAEAAAAAAAAAAgAAAA==",
+		LedgerSequence:      100,
+		ClosedAt:            time.Now(),
+	}
+
+	if input.LedgerKeyHashBase64 == "" {
+		t.Fatal("precondition: LedgerKeyHashBase64 must be set on input")
+	}
+
+	// 2. Run the production ToParquet() converter
+	parquetResult := input.ToParquet()
+
+	// 3. Assert the parquet struct is missing the LedgerKeyHashBase64 field
+	parquetType := reflect.TypeOf(parquetResult)
+	field := findField(parquetType, "LedgerKeyHashBase64")
+	if field != nil {
+		t.Fatal("Expected LedgerKeyHashBase64 to be MISSING from parquet struct, but it was found — bug may be fixed")
+	}
+
+	// 4. Confirm: JSON struct has the field, parquet struct does not — data is silently lost
+	jsonType := reflect.TypeOf(input)
+	jsonField := findField(jsonType, "LedgerKeyHashBase64")
+	if jsonField == nil {
+		t.Fatal("Expected LedgerKeyHashBase64 to exist on JSON struct")
+	}
+
+	t.Logf("BUG CONFIRMED: ContractDataOutput.LedgerKeyHashBase64=%q is present in JSON schema "+
+		"but ContractDataOutputParquet has no such field — value is silently dropped by ToParquet()",
+		input.LedgerKeyHashBase64)
+}
+
+// TestContractCodeParquetDropsLedgerKeyHashBase64 demonstrates that
+// ContractCodeOutput.ToParquet() silently drops the LedgerKeyHashBase64 field
+// because ContractCodeOutputParquet has no corresponding field.
+// A PASSING test confirms the bug: parquet output loses the base64 ledger key.
+func TestContractCodeParquetDropsLedgerKeyHashBase64(t *testing.T) {
+	// 1. Construct input with a non-empty LedgerKeyHashBase64
+	input := ContractCodeOutput{
+		ContractCodeHash:    "deadbeef",
+		LedgerKeyHash:       "abc123hash",
+		LedgerKeyHashBase64: "AAAABwAAAAEAAAAAAAAAAgAAAA==",
+		LedgerSequence:      200,
+		ClosedAt:            time.Now(),
+	}
+
+	if input.LedgerKeyHashBase64 == "" {
+		t.Fatal("precondition: LedgerKeyHashBase64 must be set on input")
+	}
+
+	// 2. Run the production ToParquet() converter
+	parquetResult := input.ToParquet()
+
+	// 3. Assert the parquet struct is missing the LedgerKeyHashBase64 field
+	parquetType := reflect.TypeOf(parquetResult)
+	field := findField(parquetType, "LedgerKeyHashBase64")
+	if field != nil {
+		t.Fatal("Expected LedgerKeyHashBase64 to be MISSING from parquet struct, but it was found — bug may be fixed")
+	}
+
+	// 4. Confirm: JSON struct has the field, parquet struct does not — data is silently lost
+	jsonType := reflect.TypeOf(input)
+	jsonField := findField(jsonType, "LedgerKeyHashBase64")
+	if jsonField == nil {
+		t.Fatal("Expected LedgerKeyHashBase64 to exist on JSON struct")
+	}
+
+	t.Logf("BUG CONFIRMED: ContractCodeOutput.LedgerKeyHashBase64=%q is present in JSON schema "+
+		"but ContractCodeOutputParquet has no such field — value is silently dropped by ToParquet()",
+		input.LedgerKeyHashBase64)
+}
+
+func findField(t reflect.Type, name string) *reflect.StructField {
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if f.Name == name {
+			return &f
+		}
+	}
+	return nil
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestContractDataParquetDropsLedgerKeyHashBase64
+    data_integrity_poc_test.go:44: BUG CONFIRMED: ContractDataOutput.LedgerKeyHashBase64="AAAABgAAAAEAAAAAAAAAAgAAAA==" is present in JSON schema but ContractDataOutputParquet has no such field — value is silently dropped by ToParquet()
+--- PASS: TestContractDataParquetDropsLedgerKeyHashBase64 (0.00s)
+=== RUN   TestContractCodeParquetDropsLedgerKeyHashBase64
+    data_integrity_poc_test.go:84: BUG CONFIRMED: ContractCodeOutput.LedgerKeyHashBase64="AAAABwAAAAEAAAAAAAAAAgAAAA==" is present in JSON schema but ContractCodeOutputParquet has no such field — value is silently dropped by ToParquet()
+--- PASS: TestContractCodeParquetDropsLedgerKeyHashBase64 (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.921s
+```
