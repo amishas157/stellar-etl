@@ -62,3 +62,4 @@
 - `cli-commands/006-gcs-upload-leaks-source-file-readers.md` — Medium — `UploadTo()` leaves local upload readers open until GC and can exhaust file descriptors during repeated GCS uploads
 - `cli-commands/007-ledger-range-command-ignores-output-write-failures.md` — Medium — `get_ledger_range_from_times -o <path>` ignores file write and close failures, exits 0, and can leave an empty range file behind
 - `data-input/007-zero-limit-ledger-readers-export-first-ledger.md` — High — `export_ledgers` and `export_token_transfer` still emit first-ledger data when `--limit 0` requests an empty export
+- `data-input/008-continuous-change-export-prepares-bounded-zero-range.md` — Medium — `export_ledger_entry_changes` continuous mode prepares a bounded `[start,0]` range and exits instead of streaming live batches
