@@ -643,3 +643,34 @@ func TestInvokeContractCodeHashMismatch(t *testing.T) {
 FAIL
 FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.906s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-11
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Does the PoC actually exercise the claimed issue?** **PARTIAL** — the test does prove that `TransformOperation()` can emit `contract_id = A` while `contract_code_hash` comes from an earlier `LedgerKeyContractCode` for B in the Soroban footprint.
+2. **Are the preconditions realistic?** **NOT ESTABLISHED** — the fixture injects `TransactionMetaV3.Operations[].Changes` state entries that map contract instances to Wasm hashes, but the hypothesis does not establish that generic `invoke_contract` transactions reliably expose that authoritative mapping during normal ETL operation.
+3. **Is the behavior a bug or by design?** **BY DESIGN / NOT PROVEN BUG** — both this repository and upstream `stellar/go` populate `invoke_contract` `contract_code_hash` through the Soroban-footprint helper, not from operation metadata or contract-instance resolution. The upstream helper is even named `ContractCodeHashFromSorobanFootprint()`, which is strong evidence that this field is intentionally footprint-derived rather than bound to `contract_id`.
+4. **Does the impact match the claimed severity?** **N/A** — since the bug itself is not established, the claimed High-severity structural corruption is not supported.
+5. **Is the finding in scope?** **WOULD BE IN SCOPE IF REAL** — a genuine wrong contract/code-hash attribution would be in scope, but that contract is not demonstrated here.
+6. **Is the test itself correct?** **INCORRECTLY FRAMED** — the test asserts a semantic requirement the codebase never states: that `invoke_contract.details.contract_code_hash` must equal the invoked contract's executable hash. What it actually proves is footprint-order dependence.
+7. **Can the results be explained without the claimed issue?** **YES** — the observed output is fully explained if `contract_code_hash` is interpreted as a Soroban-footprint convenience value. That explanation fits the local implementation, the upstream implementation, and the absence of any contrary documentation or tests.
+8. **Is this finding novel?** **IRRELEVANT AFTER REJECTION**
+
+### Rejection Reason
+
+The PoC demonstrates current helper behavior, but it does not prove that behavior is wrong. The strongest available evidence shows `contract_code_hash` for `invoke_contract` is intentionally populated from the Soroban footprint, not authoritatively resolved for the invoked contract. Without a documented or code-enforced contract tying this field to `details.contract_id`, the mismatch is an interpretation issue, not confirmed data corruption.
+
+### Failed Checks
+
+- 2
+- 3
+- 6
+- 7
