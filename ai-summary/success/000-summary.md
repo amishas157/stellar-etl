@@ -58,3 +58,4 @@
 - `data-transform/017-liquidity-pool-deposit-detail-float64-rounding.md` — Critical — liquidity-pool deposit details round large reserve deltas and share amounts
 - `utilities/002-added-signers-are-mislabeled-as-updated.md` — High — `account_signers` exports newly added signer rows as `UPDATED` instead of `CREATED`
 - `data-input/005-contract-events-limit-counts-transactions-instead-of-contract-event-rows.md` — Medium — `export_contract_events --limit` counts transactions before emitted contract-event rows and can return empty or oversized exports
+- `data-input/006-token-transfer-limit-counts-ledgers-instead-of-token-transfer-rows.md` — Medium — `export_token_transfer --limit` counts ledgers before emitted token-transfer rows and can return empty or oversized exports
