@@ -306,3 +306,34 @@ func TestExportAssetsIncludesFailedTransactionAssets(t *testing.T) {
 PASS
 ok  	github.com/stellar/stellar-etl/v2/internal/input	0.827s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-11
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Does the PoC exercise the claimed issue?** Partially. It correctly shows that `ledger.TransactionEnvelopes()` exposes failed transaction envelopes and that the asset reader does not inspect results, but it does not call `GetPaymentOperations()` itself and does not prove that the resulting `history_assets` row is incorrect under this command's contract.
+2. **Are the preconditions realistic?** Yes. Failed payment or manage-sell-offer transactions carrying unique asset references can occur on-chain.
+3. **Is the behavior a bug or by design?** By design. The command is documented as exporting assets "created from payment operations," not assets proven by successful state application, and the implementation consistently derives rows from selected operation bodies rather than ledger-entry state. This matches the existing narrow scope of `export_assets`.
+4. **Does the impact match the claimed severity?** No. Because the finding itself is not established, there is no demonstrated structural corruption to rate as High.
+5. **Is the finding in scope?** If real, yes, but the current evidence does not establish a real correctness defect.
+6. **Is the test itself correct?** Not as a bug proof. The test passes by asserting the exact envelope-iteration behavior that the implementation intentionally performs; it never demonstrates a mismatch between actual output and a documented requirement.
+7. **Can the results be explained without the claimed issue?** Yes. A benign explanation is that `export_assets` is an envelope-derived asset-reference export over payment/manage-sell operations, and failed transactions are still part of the ledger history being scanned unless a command explicitly filters for success (as `GetTrades()` does).
+8. **Is this finding novel?** Likely novel, but novelty does not matter once the finding is rejected on semantics.
+
+### Rejection Reason
+
+The PoC proves a missing success filter, but the hypothesis never establishes that `export_assets` is supposed to be success-filtered. In this codebase, failed transactions and operations are generally still exported as part of history unless success materially changes the derived dataset, and `export_assets` is intentionally a narrow asset-reference export sourced from operation bodies rather than from successful ledger-state transitions.
+
+### Failed Checks
+
+- 3. Behavior is by design rather than a correctness bug
+- 4. Claimed impact/severity is unsupported because no wrong output requirement was violated
+- 6. Test does not prove incorrect output; it only proves the implementation's chosen input source
+- 7. The observed result has a benign explanation consistent with the command's documented scope
