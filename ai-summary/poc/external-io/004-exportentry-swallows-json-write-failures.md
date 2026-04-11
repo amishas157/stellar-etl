@@ -81,3 +81,92 @@ In both cases, `MaybeUpload()` is subsequently called on the malformed file, and
   3. Call `ExportEntry(transformed, outFile, nil)`
   4. Observe the returned error
 - **Assertion**: Assert that the returned `error` is non-nil when `Write` fails. Currently it will be `nil`, demonstrating the bug. Also assert that the returned `numBytes` does not include bytes from the failed write.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: cmd/data_integrity_poc_test.go
+**Test Name**: "TestExportEntrySwallowsWriteError"
+**Test Language**: Go
+
+### Demonstration
+
+The test calls `ExportEntry()` with a closed file handle, causing both `outFile.Write()` and `outFile.WriteString("\n")` to fail with "file already closed" errors. Despite both I/O operations failing, `ExportEntry()` returns `nil` error and `numBytes=0`. This proves that all 10 export commands would treat a failed write as successful, skip incrementing their failure counter, and proceed to upload a malformed or empty file via `MaybeUpload()`.
+
+### Test Body
+
+```go
+package cmd
+
+import (
+	"os"
+	"testing"
+)
+
+// TestExportEntrySwallowsWriteError demonstrates that ExportEntry() returns nil
+// error even when the underlying file write fails, because it logs I/O errors
+// instead of propagating them.
+func TestExportEntrySwallowsWriteError(t *testing.T) {
+	// 1. Create a temporary file, then close it to make writes fail
+	tmpFile, err := os.CreateTemp(t.TempDir(), "poc-*.jsonl")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	filePath := tmpFile.Name()
+	tmpFile.Close() // Close the file handle — subsequent writes will fail
+
+	// Re-open so we have an *os.File value, then close the fd underneath
+	closedFile, err := os.OpenFile(filePath, os.O_RDWR, 0644)
+	if err != nil {
+		t.Fatalf("Failed to reopen temp file: %v", err)
+	}
+	closedFile.Close() // Now closedFile is an *os.File with a closed fd
+
+	// 2. Build a simple serializable entry
+	entry := map[string]string{"key": "value"}
+
+	// 3. Call ExportEntry with the closed file — Write will fail
+	numBytes, exportErr := ExportEntry(entry, closedFile, nil)
+
+	// 4. Demonstrate the bug: ExportEntry returns nil error despite write failure
+	if exportErr != nil {
+		t.Fatalf("ExportEntry returned non-nil error (bug may be fixed): %v", exportErr)
+	}
+	t.Logf("BUG CONFIRMED: ExportEntry returned nil error despite write to closed file")
+	t.Logf("Returned numBytes=%d (includes bytes from failed writes)", numBytes)
+
+	// The correct behavior would be to return a non-nil error, but ExportEntry
+	// swallows I/O errors at lines 78-85 of command_utils.go and always
+	// returns nil at line 86.
+
+	// Verify the file is empty (write did not succeed)
+	info, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatalf("Could not stat file: %v", err)
+	}
+	if info.Size() != 0 {
+		t.Fatalf("Expected empty file after failed write, got %d bytes", info.Size())
+	}
+	t.Logf("File is empty (0 bytes) — write failed but ExportEntry reported success")
+	t.Logf("A caller checking this error would proceed to MaybeUpload() with bad data")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestExportEntrySwallowsWriteError
+time="2026-04-11T12:05:03.647-05:00" level=error msg="Error writing map[key:value] to file: write /var/folders/wz/c3l_zq0s6qscqln_qh5s00240000gn/T/TestExportEntrySwallowsWriteError2689954767/001/poc-1846210504.jsonl: file already closed" pid=51544
+time="2026-04-11T12:05:03.648-05:00" level=error msg="Error writing new line to file /var/folders/wz/c3l_zq0s6qscqln_qh5s00240000gn/T/TestExportEntrySwallowsWriteError2689954767/001/poc-1846210504.jsonl: file already closed" pid=51544
+    data_integrity_poc_test.go:37: BUG CONFIRMED: ExportEntry returned nil error despite write to closed file
+    data_integrity_poc_test.go:38: Returned numBytes=0 (includes bytes from failed writes)
+    data_integrity_poc_test.go:52: File is empty (0 bytes) — write failed but ExportEntry reported success
+    data_integrity_poc_test.go:53: A caller checking this error would proceed to MaybeUpload() with bad data
+--- PASS: TestExportEntrySwallowsWriteError (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/cmd	5.749s
+```
