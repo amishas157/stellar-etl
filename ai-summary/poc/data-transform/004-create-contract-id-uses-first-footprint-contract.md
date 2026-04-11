@@ -75,3 +75,175 @@ Traced `extractOperationDetails()` for both `HostFunctionTypeCreateContract` (li
 - **Setup**: Construct a `create_contract` operation with `ContractIdPreimage` of type `FROM_ADDRESS` (deployer + salt). Build a `TransactionV1Envelope` whose `ReadWrite` footprint contains a deployer's `ContractData` entry (arbitrary key, deployer contract ID) BEFORE the new contract's `ContractInstance` entry (new contract ID). Use distinct contract IDs for the deployer and the new contract.
 - **Steps**: Call `extractOperationDetails()` with the constructed operation and transaction.
 - **Assertion**: Assert that `details["contract_id"]` equals the deployer's contract ID (demonstrating the bug), NOT the new contract's ID. Optionally derive the expected contract ID from the preimage using `SHA256(network_passphrase + preimage_type_byte + preimage_data)` and show it differs from the exported value.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestCreateContractUsesFirstFootprintContract"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `create_contract` operation with a footprint containing two `ContractData` entries: a deployer's entry (contract ID `0x01...`) listed first, followed by the new contract's entry (contract ID `0x02...`). When `extractOperationDetails()` is called, it returns the deployer's contract ID as `details["contract_id"]` because `contractIdFromTxEnvelope()` returns the first `ContractData` match in footprint order, ignoring the authoritative `ContractIdPreimage` in the operation args.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/ingest"
+	"github.com/stellar/go-stellar-sdk/strkey"
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestCreateContractUsesFirstFootprintContract demonstrates that
+// contractIdFromTxEnvelope returns the first ContractData match in the
+// footprint rather than the contract being created. When a deployer contract's
+// storage entry appears before the new ContractInstance entry, the exported
+// contract_id is the deployer's — not the newly created contract's.
+func TestCreateContractUsesFirstFootprintContract(t *testing.T) {
+	// Two distinct contract IDs: a deployer and the new contract
+	deployerHash := xdr.Hash{0x01}
+	newContractHash := xdr.Hash{0x02}
+	deployerCID := xdr.ContractId(deployerHash)
+	newCID := xdr.ContractId(newContractHash)
+
+	deployerContractID := strkey.MustEncode(strkey.VersionByteContract, deployerHash[:])
+	newContractID := strkey.MustEncode(strkey.VersionByteContract, newContractHash[:])
+
+	if deployerContractID == newContractID {
+		t.Fatal("test setup error: deployer and new contract IDs must differ")
+	}
+
+	// Build footprint: deployer's ContractData BEFORE the new contract's ContractInstance
+	deployerKey := xdr.LedgerKey{
+		Type: xdr.LedgerEntryTypeContractData,
+		ContractData: &xdr.LedgerKeyContractData{
+			Contract: xdr.ScAddress{
+				Type:       xdr.ScAddressTypeScAddressTypeContract,
+				ContractId: &deployerCID,
+			},
+			Key:        xdr.ScVal{Type: xdr.ScValTypeScvLedgerKeyContractInstance},
+			Durability: xdr.ContractDataDurabilityPersistent,
+		},
+	}
+	newContractKey := xdr.LedgerKey{
+		Type: xdr.LedgerEntryTypeContractData,
+		ContractData: &xdr.LedgerKeyContractData{
+			Contract: xdr.ScAddress{
+				Type:       xdr.ScAddressTypeScAddressTypeContract,
+				ContractId: &newCID,
+			},
+			Key:        xdr.ScVal{Type: xdr.ScValTypeScvLedgerKeyContractInstance},
+			Durability: xdr.ContractDataDurabilityPersistent,
+		},
+	}
+
+	// Build the create_contract operation
+	salt := xdr.Uint256([32]byte{0xAA})
+	sourceAccount := genericSourceAccount
+	createContractOp := xdr.Operation{
+		SourceAccount: &sourceAccount,
+		Body: xdr.OperationBody{
+			Type: xdr.OperationTypeInvokeHostFunction,
+			InvokeHostFunctionOp: &xdr.InvokeHostFunctionOp{
+				HostFunction: xdr.HostFunction{
+					Type: xdr.HostFunctionTypeHostFunctionTypeCreateContract,
+					CreateContract: &xdr.CreateContractArgs{
+						ContractIdPreimage: xdr.ContractIdPreimage{
+							Type: xdr.ContractIdPreimageTypeContractIdPreimageFromAddress,
+							FromAddress: &xdr.ContractIdPreimageFromAddress{
+								Address: xdr.ScAddress{
+									Type:       xdr.ScAddressTypeScAddressTypeContract,
+									ContractId: &deployerCID,
+								},
+								Salt: salt,
+							},
+						},
+						Executable: xdr.ContractExecutable{
+							Type:     xdr.ContractExecutableTypeContractExecutableWasm,
+							WasmHash: &xdr.Hash{0xFF},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	envelope := xdr.TransactionV1Envelope{
+		Tx: xdr.Transaction{
+			SourceAccount: sourceAccount,
+			Memo:          xdr.Memo{},
+			Operations:    []xdr.Operation{createContractOp},
+			Ext: xdr.TransactionExt{
+				V: 0,
+				SorobanData: &xdr.SorobanTransactionData{
+					Resources: xdr.SorobanResources{
+						Footprint: xdr.LedgerFootprint{
+							ReadWrite: []xdr.LedgerKey{deployerKey, newContractKey},
+							ReadOnly:  []xdr.LedgerKey{},
+						},
+					},
+					ResourceFee: 100,
+				},
+			},
+		},
+	}
+
+	transaction := ingest.LedgerTransaction{
+		Index: 1,
+		Envelope: xdr.TransactionEnvelope{
+			Type: xdr.EnvelopeTypeEnvelopeTypeTx,
+			V1:   &envelope,
+		},
+		Result: genericLedgerTransaction.Result,
+		UnsafeMeta: xdr.TransactionMeta{
+			V:  1,
+			V1: genericTxMeta,
+		},
+	}
+
+	// Run the production code path
+	details, err := extractOperationDetails(createContractOp, transaction, 0, "Test SDF Network ; September 2015")
+	if err != nil {
+		t.Fatalf("extractOperationDetails failed: %v", err)
+	}
+
+	contractID, ok := details["contract_id"].(string)
+	if !ok || contractID == "" {
+		t.Fatal("contract_id not found in operation details")
+	}
+
+	// The bug: contract_id matches the deployer (first footprint entry),
+	// not the newly created contract.
+	if contractID == deployerContractID {
+		t.Errorf("BUG CONFIRMED: contract_id is the deployer's (%s), not the new contract's (%s).\n"+
+			"contractIdFromTxEnvelope() returns the first ContractData match in footprint order.",
+			deployerContractID, newContractID)
+	}
+
+	// If the code were correct, contract_id would equal newContractID.
+	if contractID == newContractID {
+		t.Log("contract_id correctly matches the new contract — hypothesis NOT demonstrated")
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestCreateContractUsesFirstFootprintContract
+    data_integrity_poc_test.go:132: BUG CONFIRMED: contract_id is the deployer's (CAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABDQF), not the new contract's (CABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARHO).
+        contractIdFromTxEnvelope() returns the first ContractData match in footprint order.
+--- FAIL: TestCreateContractUsesFirstFootprintContract (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.818s
+```
