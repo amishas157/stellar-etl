@@ -37,3 +37,4 @@
 - `data-transform/011-effects-parquet-collapses-address-muxed-nullability.md` — High — effect Parquet export rewrites null `address_muxed` to empty strings
 - `data-integrity/004-parquet-upload-precedes-write.md` — Medium — four one-shot exporters upload a missing or stale parquet artifact before generating the current file
 - `data-integrity/005-config-parallel-compute-empty-shell.md` — High — config-setting export drops `ledger_max_dependent_tx_clusters` from `CONFIG_SETTING_CONTRACT_PARALLEL_COMPUTE_V0`
+- `data-integrity/006-eviction-iterator-empty-shell.md` — High — config-setting export drops `bucket_list_level`, `is_curr_bucket`, and `bucket_file_offset` from `CONFIG_SETTING_EVICTION_ITERATOR`
