@@ -84,3 +84,4 @@
 - `external-io/006-effects-limit-counts-transactions-not-effects.md` — Medium — `export_effects --limit` counts transactions before emitted effect rows and can exceed the requested export bound
 - `external-io/007-trades-limit-counts-operations-not-trade-rows.md` — Medium — `export_trades --limit` counts trade-capable operations before emitted trade rows and can exceed the requested export bound
 - `external-io/008-export-entry-swallows-write-errors.md` — Medium — `ExportEntry` logs failed JSON writes but returns `nil`, so exporters treat dropped rows as successful
+- `export-pipeline/018-asset-limit-underfills-distinct-rows.md` — High — `export_assets --limit` can stop after a duplicate-heavy first ledger and emit fewer distinct asset rows than requested
