@@ -77,3 +77,192 @@ Traced both `extractOperationDetails` (line 1099) and `Details` (line 1721) for 
 - **Setup**: Construct a `create_contract` operation with `Executable.Type = CONTRACT_EXECUTABLE_WASM` and a known `WasmHash` (e.g., `0xBBBB...`). Build a `TransactionV1Envelope` whose ReadOnly footprint contains TWO `ContractCode` entries: one for a deployer contract (hash `0xAAAA...` which sorts before `0xBBBB...`) and one for the target Wasm (hash `0xBBBB...`). Use `ContractIdPreimage::FromAddress` with a contract ScAddress.
 - **Steps**: Call `extractOperationDetails` (or the `Details` method) on the constructed operation and extract `details["contract_code_hash"]`.
 - **Assertion**: Assert that `details["contract_code_hash"]` equals the deployer's hash (`0xAAAA...HexString`) NOT the target Wasm hash (`0xBBBB...HexString`), demonstrating the bug. Then show that `args.Executable.MustWasmHash().HexString()` returns the correct target hash. The fix would replace the footprint scan with a direct read of `args.Executable` when `Executable.Type == ContractExecutableTypeContractExecutableWasm`.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-11
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestCreateContractIgnoresExecutableWasmHash"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a `create_contract` operation with `Executable.WasmHash = 0xBBBB...` and a footprint containing two ContractCode entries: a deployer hash `0xAAAA...` (which sorts first) and the target hash `0xBBBB...`. When `extractOperationDetails` is called, the exported `contract_code_hash` equals the deployer's hash (`aaaa...`) instead of the operation's own target hash (`bbbb...`), proving that `contractCodeHashFromTxEnvelope` returns the wrong value by scanning the footprint instead of reading `args.Executable.WasmHash`.
+
+### Test Body
+
+```go
+func TestCreateContractIgnoresExecutableWasmHash(t *testing.T) {
+	// Target Wasm hash — the hash the operation is actually creating from.
+	targetWasmHash := xdr.Hash{
+		0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB,
+		0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB,
+		0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB,
+		0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB, 0xBB,
+	}
+
+	// Deployer's Wasm hash — sorts lexicographically before the target (0xAA < 0xBB).
+	deployerWasmHash := xdr.Hash{
+		0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
+		0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
+		0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
+		0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
+	}
+
+	sourceAccount, _ := xdr.NewMuxedAccount(
+		xdr.CryptoKeyTypeKeyTypeEd25519,
+		xdr.Uint256([32]byte{}),
+	)
+
+	salt := xdr.Uint256([32]byte{0x01})
+	deployerContractId := xdr.ContractId{0xCC, 0xCC, 0xCC, 0xCC}
+
+	// Build a create_contract operation with Executable.Type = WASM and
+	// WasmHash = targetWasmHash. Use ContractIdPreimage::FromAddress with a
+	// contract deployer address.
+	operation := xdr.Operation{
+		SourceAccount: &sourceAccount,
+		Body: xdr.OperationBody{
+			Type: xdr.OperationTypeInvokeHostFunction,
+			InvokeHostFunctionOp: &xdr.InvokeHostFunctionOp{
+				HostFunction: xdr.HostFunction{
+					Type: xdr.HostFunctionTypeHostFunctionTypeCreateContract,
+					CreateContract: &xdr.CreateContractArgs{
+						ContractIdPreimage: xdr.ContractIdPreimage{
+							Type: xdr.ContractIdPreimageTypeContractIdPreimageFromAddress,
+							FromAddress: &xdr.ContractIdPreimageFromAddress{
+								Address: xdr.ScAddress{
+									Type:       xdr.ScAddressTypeScAddressTypeContract,
+									ContractId: &deployerContractId,
+								},
+								Salt: salt,
+							},
+						},
+						Executable: xdr.ContractExecutable{
+							Type:     xdr.ContractExecutableTypeContractExecutableWasm,
+							WasmHash: &targetWasmHash,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Build a TransactionV1Envelope with TWO ContractCode entries in ReadOnly.
+	// The deployer's hash (0xAA...) appears first, so contractCodeHashFromTxEnvelope
+	// will return it instead of the target (0xBB...).
+	envelope := xdr.TransactionEnvelope{
+		Type: xdr.EnvelopeTypeEnvelopeTypeTx,
+		V1: &xdr.TransactionV1Envelope{
+			Tx: xdr.Transaction{
+				SourceAccount: sourceAccount,
+				Operations:    []xdr.Operation{operation},
+				Ext: xdr.TransactionExt{
+					V: 0,
+					SorobanData: &xdr.SorobanTransactionData{
+						Resources: xdr.SorobanResources{
+							Footprint: xdr.LedgerFootprint{
+								ReadOnly: []xdr.LedgerKey{
+									{
+										Type: xdr.LedgerEntryTypeContractCode,
+										ContractCode: &xdr.LedgerKeyContractCode{
+											Hash: deployerWasmHash,
+										},
+									},
+									{
+										Type: xdr.LedgerEntryTypeContractCode,
+										ContractCode: &xdr.LedgerKeyContractCode{
+											Hash: targetWasmHash,
+										},
+									},
+								},
+								ReadWrite: []xdr.LedgerKey{},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	transaction := ingest.LedgerTransaction{
+		Index:    1,
+		Envelope: envelope,
+		Result: xdr.TransactionResultPair{
+			Result: xdr.TransactionResult{
+				Result: xdr.TransactionResultResult{
+					Code: xdr.TransactionResultCodeTxSuccess,
+					Results: &[]xdr.OperationResult{
+						{
+							Code: xdr.OperationResultCodeOpInner,
+							Tr: &xdr.OperationResultTr{
+								Type: xdr.OperationTypeInvokeHostFunction,
+								InvokeHostFunctionResult: &xdr.InvokeHostFunctionResult{
+									Code: xdr.InvokeHostFunctionResultCodeInvokeHostFunctionSuccess,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		UnsafeMeta: xdr.TransactionMeta{
+			V: 3,
+			V3: &xdr.TransactionMetaV3{
+				Operations: []xdr.OperationMeta{{}},
+				SorobanMeta: &xdr.SorobanTransactionMeta{
+					Events: []xdr.ContractEvent{},
+				},
+			},
+		},
+	}
+
+	details, err := extractOperationDetails(operation, transaction, 0, "testnet")
+	if err != nil {
+		t.Fatalf("extractOperationDetails failed: %v", err)
+	}
+
+	contractCodeHash, ok := details["contract_code_hash"].(string)
+	if !ok {
+		t.Fatalf("contract_code_hash not found or not a string in details")
+	}
+
+	// The authoritative hash for this operation is targetWasmHash.
+	expectedCorrectHash := targetWasmHash.HexString()
+	// The deployer hash that sorts first in the footprint.
+	expectedBuggyHash := deployerWasmHash.HexString()
+
+	// BUG DEMONSTRATION: The code returns the deployer's hash (first in footprint)
+	// instead of the operation's own Executable.WasmHash.
+	if contractCodeHash == expectedBuggyHash {
+		t.Logf("BUG CONFIRMED: contract_code_hash is the deployer's hash (first in footprint)")
+		t.Logf("  Got:      %s (deployer hash)", contractCodeHash)
+		t.Logf("  Expected: %s (target Wasm hash from args.Executable)", expectedCorrectHash)
+		t.Logf("  The code uses contractCodeHashFromTxEnvelope() which returns the first")
+		t.Logf("  ContractCode in the footprint, ignoring args.Executable.WasmHash")
+	} else if contractCodeHash == expectedCorrectHash {
+		t.Errorf("Expected buggy behavior (deployer hash) but got correct target hash: %s", contractCodeHash)
+	} else {
+		t.Errorf("Got unexpected hash: %s (neither deployer %s nor target %s)",
+			contractCodeHash, expectedBuggyHash, expectedCorrectHash)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestCreateContractIgnoresExecutableWasmHash
+    data_integrity_poc_test.go:873: BUG CONFIRMED: contract_code_hash is the deployer's hash (first in footprint)
+    data_integrity_poc_test.go:874:   Got:      aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (deployer hash)
+    data_integrity_poc_test.go:875:   Expected: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb (target Wasm hash from args.Executable)
+    data_integrity_poc_test.go:876:   The code uses contractCodeHashFromTxEnvelope() which returns the first
+    data_integrity_poc_test.go:877:   ContractCode in the footprint, ignoring args.Executable.WasmHash
+--- PASS: TestCreateContractIgnoresExecutableWasmHash (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.920s
+```
