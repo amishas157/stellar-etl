@@ -68,3 +68,4 @@
 - `data-transform/019-transfer-style-operation-details-round-large-amounts.md` — Critical — transfer-style `history_operations.details` amounts round distinct large stroop values together
 - `cli-commands/008-extra-fields-overwrite-canonical-json-columns.md` — High — `--extra-fields` silently overwrites canonical JSON columns and changes their types
 - `cli-commands/009-contract-events-ignore-strict-export.md` — Medium — `export_contract_events` ignores `--strict-export` and continues after transform/export failures
+- `cli-commands/010-ledger-transaction-parquet-request-silently-ignored.md` — Medium — `export_ledger_transaction --write-parquet` exits successfully, writes JSON, and silently skips the requested parquet artifact
