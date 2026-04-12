@@ -91,3 +91,168 @@ The bug is confirmed across all 6 affected commands. Key observations:
   2. Run `export_operations --start-ledger 100 --end-ledger 50 -o ops.json` and verify the same silent empty behavior
   3. Run `export_trades --start-ledger 100 --end-ledger 50 -o trades.json` and verify the same
 - **Assertion**: Current behavior produces "Number of bytes written: 0" with a success exit code. The fix would add `ValidateLedgerRange()` calls in `GetTransactions()`, `GetOperations()`, and `GetTrades()` (or at the command level before calling them), causing these cases to return an error. A simpler fix: add a local `if end < start || end == 0 { return error }` check at the top of each function.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: cmd/data_integrity_poc_test.go
+**Test Name**: "TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges"
+**Test Language**: Go
+
+### Demonstration
+
+The test proves that all 6 transaction-family export commands (`export_transactions`, `export_operations`, `export_effects`, `export_contract_events`, `export_trades`, `export_ledger_transaction`) silently succeed with exit code 0 and produce empty output files when given an impossible range (start=100, end=50). It also proves that `ValidateLedgerRange()` — which already exists in the codebase and is used by sibling code paths — correctly rejects these same ranges, confirming the missing validation is a bug rather than by-design behavior.
+
+### Test Body
+
+```go
+package cmd
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stellar/stellar-etl/v2/internal/utils"
+)
+
+func runExportPoC(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+
+	cmd := exec.Command("./stellar-etl", args...)
+	output, err := cmd.CombinedOutput()
+	return string(output), err
+}
+
+// TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges demonstrates that
+// export_transactions, export_operations, export_effects, export_contract_events,
+// export_trades, and export_ledger_transaction silently accept impossible bounded
+// ranges (end < start) and emit empty success-shaped output instead of rejecting them.
+//
+// This contrasts with ValidateLedgerRange() — which the codebase already provides
+// and which correctly rejects these same ranges — but which none of the affected
+// reader functions (GetTransactions, GetOperations, GetTrades) call.
+func TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges(t *testing.T) {
+	// Part 1: Prove ValidateLedgerRange correctly rejects impossible ranges
+	t.Run("ValidateLedgerRange rejects impossible ranges", func(t *testing.T) {
+		t.Run("end before start", func(t *testing.T) {
+			err := utils.ValidateLedgerRange(100, 50, 1000)
+			if err == nil {
+				t.Fatal("expected ValidateLedgerRange to reject end < start")
+			}
+			if !strings.Contains(err.Error(), "end sequence number is less than start") {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+		})
+
+		t.Run("end is zero", func(t *testing.T) {
+			err := utils.ValidateLedgerRange(2, 0, 1000)
+			if err == nil {
+				t.Fatal("expected ValidateLedgerRange to reject end == 0")
+			}
+			if !strings.Contains(err.Error(), "end sequence number equal to 0") {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+		})
+	})
+
+	// Part 2: Prove all 6 affected commands silently succeed with empty output
+	// on the same impossible ranges that ValidateLedgerRange would reject.
+	cases := []struct {
+		name          string
+		args          []string
+		wantValidator string
+	}{
+		{
+			name:          "export_transactions accepts end before start",
+			args:          []string{"export_transactions", "-s", "100", "-e", "50"},
+			wantValidator: "end sequence number is less than start",
+		},
+		{
+			name:          "export_operations accepts end before start",
+			args:          []string{"export_operations", "-s", "100", "-e", "50"},
+			wantValidator: "end sequence number is less than start",
+		},
+		{
+			name:          "export_effects accepts end before start",
+			args:          []string{"export_effects", "-s", "100", "-e", "50"},
+			wantValidator: "end sequence number is less than start",
+		},
+		{
+			name:          "export_contract_events accepts end before start",
+			args:          []string{"export_contract_events", "-s", "100", "-e", "50"},
+			wantValidator: "end sequence number is less than start",
+		},
+		{
+			name:          "export_trades accepts end before start",
+			args:          []string{"export_trades", "-s", "100", "-e", "50"},
+			wantValidator: "end sequence number is less than start",
+		},
+		{
+			name:          "export_ledger_transaction accepts end before start",
+			args:          []string{"export_ledger_transaction", "-s", "100", "-e", "50"},
+			wantValidator: "end sequence number is less than start",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			outputPath := filepath.Join(t.TempDir(), "out.json")
+			args := append(tc.args, "-o", outputPath)
+
+			output, err := runExportPoC(t, args...)
+			if err != nil {
+				t.Fatalf("command failed unexpectedly (backend may now reject invalid ranges): %v\nOutput: %s", err, output)
+			}
+
+			// Confirm the output does NOT contain the validation error
+			// (i.e., ValidateLedgerRange was never called)
+			if strings.Contains(output, tc.wantValidator) {
+				t.Fatalf("command reported validation error instead of silently succeeding: %s", output)
+			}
+
+			// Verify the output file exists and is empty
+			info, statErr := os.Stat(outputPath)
+			if statErr != nil {
+				t.Fatalf("expected output file to be created: %v", statErr)
+			}
+			if info.Size() != 0 {
+				t.Fatalf("expected empty output file, got %d bytes", info.Size())
+			}
+		})
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges
+=== RUN   TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges/ValidateLedgerRange_rejects_impossible_ranges
+=== RUN   TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges/ValidateLedgerRange_rejects_impossible_ranges/end_before_start
+=== RUN   TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges/ValidateLedgerRange_rejects_impossible_ranges/end_is_zero
+=== RUN   TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges/export_transactions_accepts_end_before_start
+=== RUN   TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges/export_operations_accepts_end_before_start
+=== RUN   TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges/export_effects_accepts_end_before_start
+=== RUN   TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges/export_contract_events_accepts_end_before_start
+=== RUN   TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges/export_trades_accepts_end_before_start
+=== RUN   TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges/export_ledger_transaction_accepts_end_before_start
+--- PASS: TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges (5.42s)
+    --- PASS: TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges/ValidateLedgerRange_rejects_impossible_ranges (0.00s)
+        --- PASS: TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges/ValidateLedgerRange_rejects_impossible_ranges/end_before_start (0.00s)
+        --- PASS: TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges/ValidateLedgerRange_rejects_impossible_ranges/end_is_zero (0.00s)
+    --- PASS: TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges/export_transactions_accepts_end_before_start (1.29s)
+    --- PASS: TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges/export_operations_accepts_end_before_start (0.75s)
+    --- PASS: TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges/export_effects_accepts_end_before_start (0.83s)
+    --- PASS: TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges/export_contract_events_accepts_end_before_start (0.81s)
+    --- PASS: TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges/export_trades_accepts_end_before_start (0.76s)
+    --- PASS: TestTransactionFamilyExportsReturnEmptySuccessOnBadRanges/export_ledger_transaction_accepts_end_before_start (0.99s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/cmd	7.150s
+```
