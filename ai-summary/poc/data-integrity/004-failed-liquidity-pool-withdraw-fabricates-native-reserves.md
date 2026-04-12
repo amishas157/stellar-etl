@@ -74,3 +74,103 @@ The bug is confirmed: for any failed `liquidity_pool_withdraw` (or `liquidity_po
 - **Setup**: Create a mock failed `LiquidityPoolWithdraw` transaction (set `transaction.Result.Successful()` to return false). Use a pool with one credit asset (e.g., USDC:GISSUER) and native XLM.
 - **Steps**: Call `TransformOperation()` with the failed transaction and verify the `details` map.
 - **Assertion**: Assert that `details["reserve_a_asset_type"]` equals `"native"` AND `details["reserve_b_asset_type"]` equals `"native"` — demonstrating that both reserve assets are incorrectly serialized as native even though the pool has a non-native asset. Optionally, also verify the same behavior in `LiquidityPoolDeposit` to show this is a cross-operation pattern.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestFailedLPWithdrawFabricatesNativeReserves"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a failed `LiquidityPoolWithdraw` transaction with an arbitrary pool ID and calls `extractOperationDetails()`. Since the transaction fails, the success-only block that populates `assetA`/`assetB` from pool metadata is skipped. The zero-value `xdr.Asset` structs (which default to `AssetTypeAssetTypeNative`, enum 0) are then serialized by `addAssetDetailsToOperationDetails()`, causing both `reserve_a_asset_type` and `reserve_b_asset_type` to be reported as `"native"` with the hardcoded native sentinel `asset_id` of `-5706705804583548011`. This proves the bug: any failed LP withdraw against a non-native pool fabricates wrong asset metadata.
+
+### Test Body
+
+```go
+func TestFailedLPWithdrawFabricatesNativeReserves(t *testing.T) {
+	poolID := xdr.PoolId{1, 2, 3, 4, 5, 6, 7, 8, 9}
+
+	lpWithdrawOp := xdr.Operation{
+		SourceAccount: nil,
+		Body: xdr.OperationBody{
+			Type: xdr.OperationTypeLiquidityPoolWithdraw,
+			LiquidityPoolWithdrawOp: &xdr.LiquidityPoolWithdrawOp{
+				LiquidityPoolId: poolID,
+				Amount:          4,
+				MinAmountA:      1,
+				MinAmountB:      1,
+			},
+		},
+	}
+
+	failedResultMeta := utils.CreateSampleResultMeta(false, 1)
+
+	envelope := xdr.TransactionV1Envelope{
+		Tx: xdr.Transaction{
+			SourceAccount: testAccount3,
+			Operations:    []xdr.Operation{lpWithdrawOp},
+		},
+	}
+
+	tx := ingest.LedgerTransaction{
+		Index: 1,
+		Envelope: xdr.TransactionEnvelope{
+			Type: xdr.EnvelopeTypeEnvelopeTypeTx,
+			V1:   &envelope,
+		},
+		Result: failedResultMeta.Result,
+		UnsafeMeta: xdr.TransactionMeta{
+			V:  1,
+			V1: &xdr.TransactionMetaV1{},
+		},
+	}
+
+	if tx.Result.Successful() {
+		t.Fatal("expected transaction to be failed")
+	}
+
+	details, err := extractOperationDetails(lpWithdrawOp, tx, 0, "Test SDF Network ; September 2015")
+	if err != nil {
+		t.Fatalf("extractOperationDetails returned error: %v", err)
+	}
+
+	reserveAType, _ := details["reserve_a_asset_type"].(string)
+	reserveBType, _ := details["reserve_b_asset_type"].(string)
+
+	if reserveAType != "native" || reserveBType != "native" {
+		t.Fatalf("expected fabricated native/native but got reserve_a=%q reserve_b=%q",
+			reserveAType, reserveBType)
+	}
+
+	reserveAID, _ := details["reserve_a_asset_id"].(int64)
+	reserveBID, _ := details["reserve_b_asset_id"].(int64)
+
+	nativeSentinel := int64(-5706705804583548011)
+	if reserveAID != nativeSentinel || reserveBID != nativeSentinel {
+		t.Fatalf("expected native sentinel asset_id=%d for both reserves, got a=%d b=%d",
+			nativeSentinel, reserveAID, reserveBID)
+	}
+
+	t.Logf("BUG CONFIRMED: failed LP withdraw fabricates native/native reserves")
+	t.Logf("  reserve_a_asset_type=%q  reserve_a_asset_id=%d", reserveAType, reserveAID)
+	t.Logf("  reserve_b_asset_type=%q  reserve_b_asset_id=%d", reserveBType, reserveBID)
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestFailedLPWithdrawFabricatesNativeReserves
+    data_integrity_poc_test.go:161: BUG CONFIRMED: failed LP withdraw fabricates native/native reserves
+    data_integrity_poc_test.go:162:   reserve_a_asset_type="native"  reserve_a_asset_id=-5706705804583548011
+    data_integrity_poc_test.go:163:   reserve_b_asset_type="native"  reserve_b_asset_id=-5706705804583548011
+--- PASS: TestFailedLPWithdrawFabricatesNativeReserves (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.478s
+```
