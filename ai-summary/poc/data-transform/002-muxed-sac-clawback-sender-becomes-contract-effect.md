@@ -82,3 +82,151 @@ The bug is confirmed through complete code path tracing:
 - **Setup**: Construct an `InvokeHostFunction` operation with a SAC clawback event where the `From` topic is an `ScAddress` of type `ScAddressTypeMuxedAccount`. Use a known Ed25519 public key with a muxed ID (e.g., id=42) to construct the `MuxedEd25519Account` payload.
 - **Steps**: Call `addInvokeHostFunctionEffects()` with the constructed event list. Inspect the resulting effects.
 - **Assertion**: Assert that the effect type is `EffectAccountDebited` (not `EffectContractDebited`), that the account address is the underlying `G...` address (not the operation source), and that `address_muxed` contains the full `M...` strkey. Also assert that `details["contract"]` is NOT set.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestMuxedSACClawbackSenderBecomesContractEffect"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a SAC clawback event where the debited holder (`from`) is a muxed M... address (created from a known G... key with muxed ID=42). When processed through the production `effects()` code path, the resulting effect has type `EffectContractDebited` (97) instead of `EffectAccountDebited` (3), is attributed to the admin/source account instead of the underlying G... account, and the real M... address is buried in `details["contract"]` rather than being decoded into proper `address` + `address_muxed` fields. All three corruption signals are confirmed in a single test run.
+
+### Test Body
+
+```go
+//nolint:typecheck
+package transform
+
+import (
+	"fmt"
+	"math/big"
+	"strings"
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/keypair"
+	"github.com/stellar/go-stellar-sdk/support/contractevents"
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestMuxedSACClawbackSenderBecomesContractEffect demonstrates that when a SAC
+// clawback event debits a muxed account (M... address), the effect is misclassified
+// as EffectContractDebited on the operation source account, instead of
+// EffectAccountDebited on the underlying G... account with muxed metadata.
+func TestMuxedSACClawbackSenderBecomesContractEffect(t *testing.T) {
+	// 1. Construct a muxed account address from a known G... key
+	underlyingKP := keypair.MustRandom()
+	underlyingG := underlyingKP.Address() // G... address
+
+	muxedAcct, err := xdr.MuxedAccountFromAccountId(underlyingG, 42)
+	if err != nil {
+		t.Fatalf("failed to create muxed account: %v", err)
+	}
+	muxedM := muxedAcct.Address() // M... address
+
+	// Sanity: the M address should start with 'M'
+	if !strings.HasPrefix(muxedM, "M") {
+		t.Fatalf("expected muxed address to start with M, got %s", muxedM)
+	}
+
+	admin := keypair.MustRandom().Address()
+	asset := xdr.MustNewCreditAsset("TESTER", admin)
+	amount := big.NewInt(12345)
+
+	// 2. Build an InvokeHostFunction transaction with a SAC clawback event
+	//    where the "from" participant is the muxed M... address.
+	tx := makeInvocationTransaction(
+		muxedM, "" /* to is unused for clawback */, admin,
+		asset, amount,
+		contractevents.EventTypeClawback,
+	)
+
+	operation := transactionOperationWrapper{
+		index:          0,
+		transaction:    tx,
+		operation:      tx.Envelope.Operations()[0],
+		ledgerSequence: 1,
+		network:        networkPassphrase,
+	}
+
+	// 3. Run the production code path
+	effects, err := operation.effects()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(effects) == 0 {
+		t.Fatal("expected at least one effect, got none")
+	}
+
+	effect := effects[0]
+
+	// 4. Assert the output is wrong — proving the bug.
+	//
+	// CORRECT behavior would be:
+	//   - Type = EffectAccountDebited (3)
+	//   - Address = underlying G... address
+	//   - No "contract" key in details
+	//
+	// ACTUAL (buggy) behavior:
+	//   - Type = EffectContractDebited (97)
+	//   - Address = admin (operation source), NOT the clawed-back holder
+	//   - details["contract"] = the M... address
+
+	// The effect type is EffectContractDebited instead of EffectAccountDebited
+	if effect.Type != int32(EffectContractDebited) {
+		t.Errorf("BUG NOT REPRODUCED: expected effect type EffectContractDebited (%d) due to muxed misclassification, got %d (%s)",
+			EffectContractDebited, effect.Type, effect.TypeString)
+	} else {
+		t.Logf("CONFIRMED: muxed clawback holder produced EffectContractDebited (%d) instead of EffectAccountDebited (%d)",
+			EffectContractDebited, EffectAccountDebited)
+	}
+
+	// The effect is attributed to the admin (source account) instead of the
+	// underlying G... account of the muxed holder
+	if effect.Address != admin {
+		t.Errorf("BUG NOT REPRODUCED: expected effect address to be admin %s (source misattribution), got %s",
+			admin, effect.Address)
+	} else {
+		t.Logf("CONFIRMED: effect address is admin (source) %s instead of underlying account %s",
+			admin, underlyingG)
+	}
+
+	// The real muxed address is buried in details["contract"] instead of being
+	// properly decoded into address + address_muxed fields
+	contractVal, hasContract := effect.Details["contract"]
+	if !hasContract {
+		t.Error("BUG NOT REPRODUCED: expected details[\"contract\"] to contain the muxed address")
+	} else {
+		t.Logf("CONFIRMED: details[\"contract\"] = %v (should not exist; muxed addr should be in address_muxed)", contractVal)
+	}
+
+	// Summary assertion: if all three corruption signals are present, the bug is proven
+	if effect.Type == int32(EffectContractDebited) && effect.Address == admin && hasContract {
+		t.Logf("=== BUG PROVEN: muxed SAC clawback from=%s produces wrong effect type (%s), "+
+			"wrong account (%s instead of %s), and misplaced address in details[\"contract\"] ===",
+			muxedM, EffectTypeNames[EffectContractDebited], admin, underlyingG)
+	}
+
+	_ = fmt.Sprintf("effect: %+v", effect) // prevent unused import
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestMuxedSACClawbackSenderBecomesContractEffect
+    data_integrity_poc_test.go:84: CONFIRMED: muxed clawback holder produced EffectContractDebited (97) instead of EffectAccountDebited (3)
+    data_integrity_poc_test.go:94: CONFIRMED: effect address is admin (source) GASB6WZBD2TV7IV7T3PWW3PZWJDLL2C3SJH7OSRASAQECQOVMRA6IAXY instead of underlying account GARYMJFGUGYENSIOTAJUYWLH4BCL4Y654KNQTFWNFICFBNNGTVEBBPRI
+    data_integrity_poc_test.go:104: CONFIRMED: details["contract"] = MARYMJFGUGYENSIOTAJUYWLH4BCL4Y654KNQTFWNFICFBNNGTVEBAAAAAAAAAAAAFKQ6E (should not exist; muxed addr should be in address_muxed)
+    data_integrity_poc_test.go:109: === BUG PROVEN: muxed SAC clawback from=MARYMJFGUGYENSIOTAJUYWLH4BCL4Y654KNQTFWNFICFBNNGTVEBAAAAAAAAAAAAFKQ6E produces wrong effect type (contract_debited), wrong account (GASB6WZBD2TV7IV7T3PWW3PZWJDLL2C3SJH7OSRASAQECQOVMRA6IAXY instead of GARYMJFGUGYENSIOTAJUYWLH4BCL4Y654KNQTFWNFICFBNNGTVEBBPRI), and misplaced address in details["contract"] ===
+--- PASS: TestMuxedSACClawbackSenderBecomesContractEffect (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.753s
+```
