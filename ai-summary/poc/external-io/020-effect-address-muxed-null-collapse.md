@@ -73,3 +73,123 @@ Traced the complete code path from effect creation through Parquet serialization
 - **Setup**: Create an `EffectOutput` with `AddressMuxed: null.String{}` (simulating an unmuxed account effect, as `addUnmuxed` does). Create a second with `AddressMuxed: null.StringFrom("MAAA...")` (simulating a muxed account effect).
 - **Steps**: (1) JSON-marshal both outputs — assert the unmuxed one has `address_muxed` absent/null and the muxed one has the M... string. (2) Call `.ToParquet()` on both — extract `AddressMuxed` from the resulting `EffectOutputParquet`.
 - **Assertion**: Assert that the unmuxed Parquet row has `AddressMuxed == ""` while the JSON row has null, proving the null collapse. Assert that JSON distinguishes the two rows but Parquet does not (both unmuxed "" and a hypothetical empty-string address would be indistinguishable).
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestEffectAddressMuxedNullCollapse"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs two `EffectOutput` values — one with `AddressMuxed: null.String{}` (unmuxed, as `addUnmuxed` produces) and one with `AddressMuxed: null.StringFrom("MAAZI...")` (muxed). JSON marshaling correctly represents the unmuxed case as `null`, preserving the distinction. However, `ToParquet()` reads `.String` from the `null.String` wrapper, collapsing the null value to `""`. This proves that Parquet output loses the null/present distinction for `address_muxed` on the vast majority of effect rows.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"encoding/json"
+	"testing"
+
+	"github.com/guregu/null"
+)
+
+// TestEffectAddressMuxedNullCollapse demonstrates that the Parquet conversion
+// collapses a null (missing) address_muxed into an empty string, making it
+// indistinguishable from a genuinely empty value.
+func TestEffectAddressMuxedNullCollapse(t *testing.T) {
+	// 1. Create an EffectOutput simulating an unmuxed account (addUnmuxed path)
+	unmuxedEffect := EffectOutput{
+		Address:      "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7",
+		AddressMuxed: null.String{}, // Valid=false, String="" — as addUnmuxed sets it
+		OperationID:  12345,
+		Type:         1,
+		TypeString:   "account_created",
+	}
+
+	// 2. Create an EffectOutput simulating a muxed account (addMuxed path)
+	muxedAddress := "MAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCAAAAAAAAAPCICBKU"
+	muxedEffect := EffectOutput{
+		Address:      "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN7",
+		AddressMuxed: null.StringFrom(muxedAddress), // Valid=true — as addMuxed sets it
+		OperationID:  12346,
+		Type:         1,
+		TypeString:   "account_created",
+	}
+
+	// 3. Verify JSON serialization correctly distinguishes the two cases
+	unmuxedJSON, err := json.Marshal(unmuxedEffect)
+	if err != nil {
+		t.Fatalf("failed to marshal unmuxed effect: %v", err)
+	}
+	muxedJSON, err := json.Marshal(muxedEffect)
+	if err != nil {
+		t.Fatalf("failed to marshal muxed effect: %v", err)
+	}
+
+	// JSON for unmuxed should have address_muxed as null (null.String marshals as JSON null when Valid=false)
+	var unmuxedMap map[string]interface{}
+	if err := json.Unmarshal(unmuxedJSON, &unmuxedMap); err != nil {
+		t.Fatalf("failed to unmarshal unmuxed JSON: %v", err)
+	}
+	unmuxedVal, exists := unmuxedMap["address_muxed"]
+	if !exists {
+		t.Fatalf("JSON unmuxed: expected address_muxed to be present as null, but it was absent")
+	}
+	if unmuxedVal != nil {
+		t.Errorf("JSON unmuxed: expected address_muxed to be null, got %v", unmuxedVal)
+	}
+
+	// JSON for muxed should contain the M... address
+	var muxedMap map[string]interface{}
+	if err := json.Unmarshal(muxedJSON, &muxedMap); err != nil {
+		t.Fatalf("failed to unmarshal muxed JSON: %v", err)
+	}
+	if val, exists := muxedMap["address_muxed"]; !exists || val != muxedAddress {
+		t.Errorf("JSON muxed: expected address_muxed=%q, got %v", muxedAddress, val)
+	}
+
+	// 4. Convert both to Parquet and check the AddressMuxed field
+	unmuxedParquet := unmuxedEffect.ToParquet().(EffectOutputParquet)
+	muxedParquet := muxedEffect.ToParquet().(EffectOutputParquet)
+
+	// The muxed Parquet row should have the M... address — this is correct
+	if muxedParquet.AddressMuxed != muxedAddress {
+		t.Errorf("Parquet muxed: expected AddressMuxed=%q, got %q", muxedAddress, muxedParquet.AddressMuxed)
+	}
+
+	// BUG: The unmuxed Parquet row has AddressMuxed="" instead of being absent/null.
+	// This proves null collapse: a missing muxed address becomes an empty string.
+	if unmuxedParquet.AddressMuxed != "" {
+		t.Fatalf("Unexpected: unmuxed Parquet AddressMuxed is %q, expected empty string from null collapse", unmuxedParquet.AddressMuxed)
+	}
+
+	// The critical proof: JSON distinguishes unmuxed (absent) from muxed (present),
+	// but Parquet collapses unmuxed to "" — making it indistinguishable from any
+	// other row where AddressMuxed happens to be an empty string.
+	t.Logf("BUG CONFIRMED: JSON correctly omits address_muxed for unmuxed accounts")
+	t.Logf("BUG CONFIRMED: Parquet writes address_muxed=\"\" for unmuxed accounts (null collapse)")
+	t.Logf("Unmuxed Parquet AddressMuxed = %q (should be null/absent, but is empty string)", unmuxedParquet.AddressMuxed)
+	t.Logf("Muxed Parquet AddressMuxed = %q (correct)", muxedParquet.AddressMuxed)
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestEffectAddressMuxedNullCollapse
+    data_integrity_poc_test.go:83: BUG CONFIRMED: JSON correctly omits address_muxed for unmuxed accounts
+    data_integrity_poc_test.go:84: BUG CONFIRMED: Parquet writes address_muxed="" for unmuxed accounts (null collapse)
+    data_integrity_poc_test.go:85: Unmuxed Parquet AddressMuxed = "" (should be null/absent, but is empty string)
+    data_integrity_poc_test.go:86: Muxed Parquet AddressMuxed = "MAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCAAAAAAAAAPCICBKU" (correct)
+--- PASS: TestEffectAddressMuxedNullCollapse (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.771s
+```
