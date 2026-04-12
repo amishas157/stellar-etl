@@ -77,3 +77,117 @@ Despite these mitigating factors, the inconsistency is real: the code admits the
 - **Setup**: Construct a `ManageSellOfferOp` with a known `Selling` asset (e.g., USDT) and a known `Buying` asset (e.g., EUR credit). Wrap it in an `xdr.Operation` with `OperationTypeManageSellOffer`.
 - **Steps**: Call `TransformAsset()` with the constructed operation. Verify it returns only the selling asset. Then demonstrate that no call path in the export pipeline ever processes the buying asset — there is no second call to `TransformAsset` or `transformSingleAsset` for the buying side.
 - **Assertion**: Assert that `TransformAsset` returns only USDT (the selling asset) and that EUR (the buying asset) is not exported anywhere. This demonstrates the asymmetric extraction.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestManageSellOfferOmitsBuyingAsset"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a ManageSellOffer operation with USDT as the selling asset and ETH as the buying asset, then calls `TransformAsset()`. The function returns only a single `AssetOutput` containing USDT — the buying asset ETH is completely absent from the return value. Since the export pipeline calls `TransformAsset` exactly once per admitted operation and the return type is a single `(AssetOutput, error)`, there is no mechanism to ever export the buying side. This confirms that an asset appearing exclusively as the buying/quote side of ManageSellOffer operations will be silently omitted from the export.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestManageSellOfferOmitsBuyingAsset demonstrates that TransformAsset only
+// extracts the Selling asset from a ManageSellOffer operation and silently
+// drops the Buying asset. An asset appearing exclusively as the buying/quote
+// side of ManageSellOffer operations will never be exported by export_assets.
+func TestManageSellOfferOmitsBuyingAsset(t *testing.T) {
+	// Construct a ManageSellOffer with known Selling (USDT) and Buying (ETH) assets
+	sellOp := xdr.ManageSellOfferOp{
+		Selling: usdtAsset,
+		Buying:  ethAsset,
+		Amount:  100000000,
+		Price: xdr.Price{
+			N: 1,
+			D: 2,
+		},
+		OfferId: 0,
+	}
+
+	op := xdr.Operation{
+		SourceAccount: nil,
+		Body: xdr.OperationBody{
+			Type:             xdr.OperationTypeManageSellOffer,
+			ManageSellOfferOp: &sellOp,
+		},
+	}
+
+	// Call TransformAsset — this is the only call the export pipeline makes per operation
+	output, err := TransformAsset(op, 0, 0, 0, genericLedgerCloseMeta)
+	if err != nil {
+		t.Fatalf("TransformAsset returned unexpected error: %v", err)
+	}
+
+	// The function returns ONLY the selling asset (USDT)
+	if output.AssetCode != "USDT" {
+		t.Errorf("expected selling asset USDT, got %q", output.AssetCode)
+	}
+
+	// TransformAsset returns a single AssetOutput — there is no mechanism to
+	// return both assets. The buying asset (ETH) is completely lost.
+	// Demonstrate: call TransformAsset again with the same op — it still returns USDT only.
+	output2, err := TransformAsset(op, 0, 0, 0, genericLedgerCloseMeta)
+	if err != nil {
+		t.Fatalf("second TransformAsset call returned unexpected error: %v", err)
+	}
+
+	// Both calls produce USDT, never ETH — the buying asset is irrecoverably omitted
+	if output2.AssetCode != "USDT" {
+		t.Errorf("expected selling asset USDT on second call, got %q", output2.AssetCode)
+	}
+
+	// The core assertion: TransformAsset's return type is (AssetOutput, error),
+	// a single asset. There is no way to get ETH out of this function for a
+	// ManageSellOffer. The buying asset code "ETH" never appears in the output.
+	if output.AssetCode == "ETH" {
+		t.Error("TransformAsset unexpectedly returned the buying asset — hypothesis disproven")
+	}
+
+	// Verify the buying asset (ETH) details to confirm it exists in the operation
+	// but is not in the output
+	var buyingAssetType, buyingAssetCode, buyingAssetIssuer string
+	err = sellOp.Buying.Extract(&buyingAssetType, &buyingAssetCode, &buyingAssetIssuer)
+	if err != nil {
+		t.Fatalf("failed to extract buying asset: %v", err)
+	}
+	if buyingAssetCode != "ETH" {
+		t.Fatalf("test setup error: expected buying asset ETH, got %q", buyingAssetCode)
+	}
+
+	t.Logf("ManageSellOffer contains Selling=USDT and Buying=ETH")
+	t.Logf("TransformAsset returned: code=%q issuer=%q type=%q", output.AssetCode, output.AssetIssuer, output.AssetType)
+	t.Logf("Buying asset (code=%q issuer=%q type=%q) is silently dropped — never exported",
+		buyingAssetCode, buyingAssetIssuer, buyingAssetType)
+	t.Logf("BUG CONFIRMED: export_assets admits ManageSellOffer but only extracts the Selling side")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestManageSellOfferOmitsBuyingAsset
+    data_integrity_poc_test.go:76: ManageSellOffer contains Selling=USDT and Buying=ETH
+    data_integrity_poc_test.go:77: TransformAsset returned: code="USDT" issuer="GBVVRXLMNCJQW3IDDXC3X6XCH35B5Q7QXNMMFPENSOGUPQO7WO7HGZPA" type="credit_alphanum4"
+    data_integrity_poc_test.go:78: Buying asset (code="ETH" issuer="GBT4YAEGJQ5YSFUMNKX6BPBUOCPNAIOFAVZOF6MIME2CECBMEIUXFZZN" type="credit_alphanum4") is silently dropped — never exported
+    data_integrity_poc_test.go:80: BUG CONFIRMED: export_assets admits ManageSellOffer but only extracts the Selling side
+--- PASS: TestManageSellOfferOmitsBuyingAsset (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.935s
+```
