@@ -75,3 +75,152 @@ Traced the full data flow from XDR event topics through the SDK's `parseBalanceC
 - **Setup**: Construct a `contractevents.Event` with topic addresses of type `ScAddressTypeScAddressTypeMuxedAccount` (a muxed Ed25519 account). Create a valid SAC transfer event where `From` is a muxed account address. Set up an `effectsWrapper` with a different operation source account.
 - **Steps**: Call `addInvokeHostFunctionEffects()` with the crafted event list. Inspect the resulting `e.effects` slice.
 - **Assertion**: Assert that the emitted effect has type `EffectAccountDebited` (not `EffectContractDebited`), that `Address` is the underlying `G...` account of the muxed participant (not the source account), that `AddressMuxed` contains the `M...` address, and that `details` does NOT contain a `contract` key.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestMuxedSACTransferBecomesContractEffect"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a SAC transfer event where the `from` participant is a valid muxed account (M... address) and the `to` is a normal G... account. When `operation.effects()` processes this event, the `IsValidEd25519PublicKey` check at line 1354 rejects the M... address, causing the code to fall through to the contract branch. This produces three simultaneous corruptions: (1) effect type is `contract_debited` (97) instead of `account_debited` (3), (2) the address is set to the operation source account instead of the muxed participant's underlying G... account, and (3) `details["contract"]` is populated with the M... muxed address instead of a C... contract address.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"fmt"
+	"math/big"
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/keypair"
+	"github.com/stellar/go-stellar-sdk/strkey"
+	"github.com/stellar/go-stellar-sdk/support/contractevents"
+	"github.com/stellar/go-stellar-sdk/xdr"
+	"github.com/stellar/stellar-etl/v2/internal/toid"
+)
+
+// TestMuxedSACTransferBecomesContractEffect demonstrates that when a muxed
+// account (M...) appears as the "from" in a SAC transfer event, the effects
+// exporter misclassifies it as a contract_debited effect instead of
+// account_debited, because IsValidEd25519PublicKey rejects M... addresses.
+func TestMuxedSACTransferBecomesContractEffect(t *testing.T) {
+	const testPassphrase = "Arbitrary Testing Passphrase"
+
+	// 1. Create a muxed account address from a random G... address
+	kp := keypair.MustRandom()
+	gAddress := kp.Address()
+	muxedAcct, err := xdr.MuxedAccountFromAccountId(gAddress, 12345)
+	if err != nil {
+		t.Fatalf("failed to create muxed account: %v", err)
+	}
+	mAddress := muxedAcct.Address() // M... address
+
+	// Verify our M address is valid muxed but NOT valid Ed25519
+	if !strkey.IsValidMuxedAccountEd25519PublicKey(mAddress) {
+		t.Fatalf("expected %s to be a valid muxed address", mAddress)
+	}
+	if strkey.IsValidEd25519PublicKey(mAddress) {
+		t.Fatalf("expected %s to NOT pass IsValidEd25519PublicKey", mAddress)
+	}
+
+	// 2. Set up a SAC transfer event: muxed account sends to a normal account
+	admin := keypair.MustRandom().Address()
+	to := keypair.MustRandom().Address()
+	asset := xdr.MustNewCreditAsset("TEST", admin)
+	amount := big.NewInt(10000000) // 1.0 in stroops
+
+	tx := makeInvocationTransaction(
+		mAddress, to, admin, asset, amount,
+		contractevents.EventTypeTransfer,
+	)
+
+	// 3. Run the production code path
+	operation := transactionOperationWrapper{
+		index:          0,
+		transaction:    tx,
+		operation:      tx.Envelope.Operations()[0],
+		ledgerSequence: 1,
+		network:        testPassphrase,
+	}
+	effects, err := operation.effects()
+	if err != nil {
+		t.Fatalf("effects() returned error: %v", err)
+	}
+
+	if len(effects) < 2 {
+		t.Fatalf("expected at least 2 effects, got %d", len(effects))
+	}
+
+	// 4. The first effect is for the "from" (our muxed account).
+	// EXPECTED (correct behavior): EffectAccountDebited (type 3)
+	// ACTUAL (bug): EffectContractDebited (type 97)
+	fromEffect := effects[0]
+
+	// Bug demonstration 1: Wrong effect type
+	if fromEffect.Type == int32(EffectContractDebited) {
+		t.Errorf("BUG CONFIRMED: Muxed account from=%s produced effect type contract_debited (%d) "+
+			"instead of account_debited (%d)",
+			mAddress, EffectContractDebited, EffectAccountDebited)
+	}
+	if fromEffect.TypeString == EffectTypeNames[EffectContractDebited] {
+		t.Errorf("BUG CONFIRMED: Effect TypeString is %q, expected %q",
+			fromEffect.TypeString, EffectTypeNames[EffectAccountDebited])
+	}
+
+	// Bug demonstration 2: Wrong address (attributed to source, not participant)
+	expectedOpID := toid.New(1, 0, 1).ToInt64()
+	if fromEffect.OperationID == expectedOpID && fromEffect.Address != gAddress {
+		t.Errorf("BUG CONFIRMED: Effect address is %q (source account), expected %q (underlying G... of muxed participant)",
+			fromEffect.Address, gAddress)
+	}
+
+	// Bug demonstration 3: details["contract"] is set to M... address (semantic corruption)
+	if contractVal, ok := fromEffect.Details["contract"]; ok {
+		t.Errorf("BUG CONFIRMED: details[\"contract\"] = %q (an M... muxed address, not a C... contract). "+
+			"Downstream consumers parsing this as a contract ID will get garbage.", contractVal)
+	}
+
+	// Print summary for clarity
+	fmt.Printf("\n=== Muxed SAC Transfer Effect Summary ===\n")
+	fmt.Printf("Muxed From address:  %s\n", mAddress)
+	fmt.Printf("Underlying G address: %s\n", gAddress)
+	fmt.Printf("Source/admin address: %s\n", admin)
+	fmt.Printf("Effect Type:         %d (%s)\n", fromEffect.Type, fromEffect.TypeString)
+	fmt.Printf("Effect Address:      %s\n", fromEffect.Address)
+	if c, ok := fromEffect.Details["contract"]; ok {
+		fmt.Printf("details[contract]:   %s\n", c)
+	}
+	fmt.Printf("==========================================\n")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestMuxedSACTransferBecomesContractEffect
+    data_integrity_poc_test.go:74: BUG CONFIRMED: Muxed account from=MAPG7CUXLJESRIYJK7JJOSNLBKC2JV3HGKOQGM3RRPIV67OIITQZUAAAAAAAAABQHFB4G produced effect type contract_debited (97) instead of account_debited (3)
+    data_integrity_poc_test.go:79: BUG CONFIRMED: Effect TypeString is "contract_debited", expected "account_debited"
+    data_integrity_poc_test.go:86: BUG CONFIRMED: Effect address is "GASOUTYPH43C6LNJC7NQBAZUV7OM5UTB6OUF5JY563QEZT46ITF3F6FU" (source account), expected "GAPG7CUXLJESRIYJK7JJOSNLBKC2JV3HGKOQGM3RRPIV67OIITQZVXVN" (underlying G... of muxed participant)
+    data_integrity_poc_test.go:92: BUG CONFIRMED: details["contract"] = "MAPG7CUXLJESRIYJK7JJOSNLBKC2JV3HGKOQGM3RRPIV67OIITQZUAAAAAAAAABQHFB4G" (an M... muxed address, not a C... contract). Downstream consumers parsing this as a contract ID will get garbage.
+
+=== Muxed SAC Transfer Effect Summary ===
+Muxed From address:  MAPG7CUXLJESRIYJK7JJOSNLBKC2JV3HGKOQGM3RRPIV67OIITQZUAAAAAAAAABQHFB4G
+Underlying G address: GAPG7CUXLJESRIYJK7JJOSNLBKC2JV3HGKOQGM3RRPIV67OIITQZVXVN
+Source/admin address: GASOUTYPH43C6LNJC7NQBAZUV7OM5UTB6OUF5JY563QEZT46ITF3F6FU
+Effect Type:         97 (contract_debited)
+Effect Address:      GASOUTYPH43C6LNJC7NQBAZUV7OM5UTB6OUF5JY563QEZT46ITF3F6FU
+details[contract]:   MAPG7CUXLJESRIYJK7JJOSNLBKC2JV3HGKOQGM3RRPIV67OIITQZUAAAAAAAAABQHFB4G
+==========================================
+--- FAIL: TestMuxedSACTransferBecomesContractEffect (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.662s
+```
