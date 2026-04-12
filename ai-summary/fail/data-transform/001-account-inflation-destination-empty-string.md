@@ -193,3 +193,31 @@ func TestAccountInflationDestinationEmptyString(t *testing.T) {
 PASS
 ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.926s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-12
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Exercises claimed issue**: PARTIAL — the test reaches `TransformAccount()` and shows that a nil `InflationDest` becomes `""`, but that only proves the current export encoding.
+2. **Realistic preconditions**: PASS — real account entries can omit `InflationDest`.
+3. **Bug vs by-design**: FAIL — both `AccountOutput` and `AccountOutputParquet` explicitly model `inflation_destination` as a non-nullable string, `git blame` shows that schema shape dates back to the original account transform, and shipped golden fixtures already encode missing inflation destinations as `""`.
+4. **Impact/severity**: FAIL — `""` is not a plausible Stellar address and existing fixtures already treat it as the sentinel value for "unset", so this is at most informational and below the report threshold for this review.
+5. **In scope**: FAIL — after adversarial review, this reduces to a longstanding schema/nullability contract rather than silent corruption producing materially wrong exported data.
+6. **Test correctness**: FAIL — the PoC asserts the implementation's current behavior, but it provides no independent oracle showing that null or omission is the required contract; it passes even if the export format is intentional.
+7. **Alternative explanations**: FAIL — the observed output is fully explained by the explicit schema and historical golden files, without needing to posit a transform bug.
+8. **Novelty**: PASS — likely novel, but novelty does not overcome the failed correctness checks.
+
+### Rejection Reason
+
+The PoC demonstrates an intentional export contract, not a data-integrity bug. Missing inflation destinations have been modeled as empty strings since the account schema was introduced, and existing golden outputs depend on that representation, so the test confirms established behavior rather than silent corruption.
+
+### Failed Checks
+
+3, 4, 5, 6, 7
