@@ -121,3 +121,4 @@
 - `data-transform/032-muxed-sac-mint-recipient-becomes-contract-effect.md` — High — muxed SAC mint recipients are exported as contract effects on the operation source account
 - `data-transform/033-muxed-sac-clawback-sender-becomes-contract-effect.md` — High — muxed SAC clawback holders are exported as contract effects on the operation source account
 - `data-transform/034-muxed-sac-burn-sender-becomes-contract-effect.md` — High — muxed SAC burn holders are exported as contract effects on the operation source account
+- `external-io/019-transaction-parquet-zeroes-absent-min-account-sequence.md` — High — transaction Parquet export encodes absent `min_account_sequence` as `0`, collapsing it with explicit `min_account_sequence=0`
