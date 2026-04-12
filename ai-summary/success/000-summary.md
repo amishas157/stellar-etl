@@ -96,4 +96,5 @@
 - `data-transform/025-invoke-contract-asset-balance-changes-ignore-operation-events.md` — High — `invoke_contract` exports empty `asset_balance_changes` when SAC contract events are not duplicated into diagnostics
 - `data-integrity/014-ledger-entry-changes-leaks-file-descriptors.md` — Medium — `export_ledger_entry_changes` leaves JSON writers open until GC and can stop later batches at the OS FD limit
 - `data-integrity/015-ledger-transaction-drops-post-apply-fee-changes.md` — High — `ledger_transaction` export drops protocol-23+ `PostTxApplyFeeChanges` from all raw blobs
+- `data-integrity/016-trade-parquet-null-collapse.md` — High — trade Parquet export collapses nullable routing fields into zero values, including unrecoverable `seller_is_exact` collisions within offer trades
 - `export-pipeline/019-config-parallel-compute-exports-empty-shell.md` — High — config-setting export drops `ledger_max_dependent_tx_clusters` from `CONFIG_SETTING_CONTRACT_PARALLEL_COMPUTE_V0`

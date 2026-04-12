@@ -34,3 +34,31 @@ The production transaction transform already has special-case logic proving that
 ## Anti-Evidence
 
 Downstream consumers that only need the pre-apply fee debit or that trust the derived scalar refund columns may not notice. But consumers that treat `tx_fee_meta` as the authoritative raw fee-change blob will silently miss the P23+ refund leg.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-12
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of data-transform 054+055 and 060
+
+### Trace Summary
+
+This exact hypothesis was previously investigated under the data-transform subsystem as entries 054+055 (condensed in `ai-summary/fail/data-transform/summary.md`) and entry 060 (`ai-summary/fail/data-transform/060-ledger-transaction-miss-post-apply-fee-xdr.md`). The prior investigation conclusively determined that `tx_fee_meta` has always serialized only `transaction.FeeChanges` (the pre-apply fee debit) — this is the intentional design contract, matching upstream Horizon's `fee_changes_xdr` field semantics. The hypothesis incorrectly frames the existing `tx_fee_meta` as incomplete rather than recognizing it represents a specific, well-defined subset of fee changes.
+
+### Code Paths Examined
+
+- `internal/transform/transaction.go:64-67` — serializes `transaction.FeeChanges` into `TxFeeMeta` (pre-apply fee debit, by design)
+- `internal/transform/ledger_transaction.go:32-35` — same pattern for the raw ledger transaction export
+- `internal/transform/transaction.go:195-202` — P23+ handling uses `PostTxApplyFeeChanges` for scalar `ResourceFeeRefund` computation, not for raw blob export
+- `ai-summary/fail/data-transform/summary.md` — entry 054+055 documents this exact investigation with the conclusion that `tx_fee_meta` is intentionally pre-apply only
+
+### Why It Failed
+
+This is a duplicate of data-transform fail entries 054+055 and 060. Those prior investigations established that `tx_fee_meta` is the pre-apply fee debit blob by design, consistent with upstream Horizon's `fee_changes_xdr` contract. The P23+ test fixture with `PostTxApplyFeeChanges` explicitly asserts the `FeeChanges`-only convention. The hypothesis misframes an intentional design boundary as a data omission bug.
+
+### Lesson Learned
+
+Cross-subsystem novelty checks are essential. Hypotheses about the same code path filed under different subsystems (external-io vs data-transform) should be caught as duplicates during the novelty check phase.
