@@ -254,3 +254,31 @@ func TestLPDepositTinyPriceBoundsCollapseToZero(t *testing.T) {
 PASS
 ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.895s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-12
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Exercises claimed issue**: PASS — the PoC drives `TransformOperation()` through `extractOperationDetails()` into `addPriceDetails()` and correctly shows that `strconv.ParseFloat(price.String(), 64)` turns very small valid `xdr.Price` values into `0`.
+2. **Realistic preconditions**: PASS — `xdr.Price{N: 1, D: 20000001}` and `xdr.Price{N: 1, D: 2147483647}` are valid on-chain prices, and a failed LP-deposit still reaches the relevant conversion path.
+3. **Bug vs by-design**: FAIL — this export surface intentionally follows Horizon's dual-field contract: a rounded human-readable price plus an exact rational companion. In this repository, `transactionOperationWrapper.Details()` emits `min_price` / `max_price` via `op.MinPrice.String()` and separately preserves `min_price_r` / `max_price_r`; the BigQuery-oriented path preserves the same structure, only coercing the rounded display value to `float64`. The precise value is still exported in the companion rational fields.
+4. **Impact/severity**: FAIL — the hypothesis frames this as critical financial corruption, but the authoritative price is not lost. `history_operations.details` is a JSON blob, not a first-class numeric price column, and consumers already receive exact `min_price_r` / `max_price_r`. At most this is an informational representation choice for the convenience field.
+5. **In scope**: PASS — if the ETL dropped the only authoritative price representation, this would be in scope. It does not.
+6. **Test correctness**: PASS — the test is technically sound for demonstrating the rounded convenience field.
+7. **Alternative explanations**: FAIL — the observed `0` is fully explained by the intentional `xdr.Price.String()` formatting contract rather than an accidental ETL-only corruption path.
+8. **Novelty**: NOT ASSESSED — rejection does not depend on novelty.
+
+### Rejection Reason
+
+The PoC proves rounding of the convenience `min_price` / `max_price` field, but it does **not** prove loss of the actual bound. The ETL exports the exact value separately in `min_price_r` / `max_price_r` and mirrors Horizon's longstanding "rounded display value + exact rational" representation, so this is not a novel data-integrity bug in scope.
+
+### Failed Checks
+
+3, 4, 7

@@ -103,6 +103,7 @@
 - `external-io/014-sponsor-null-collapses-to-empty-string.md` — High — ledger-entry Parquet export rewrites null `sponsor` values to empty strings
 - `external-io/016-transaction-family-exports-return-empty-success-on-bad-ranges.md` — High — six transaction-family export commands accept impossible bounded ranges and return empty success-shaped output
 - `external-io/017-export-assets-zero-limit-emits-first-ledger-assets.md` — Medium — `export_assets --limit 0` still scans the first in-range ledger and can emit non-empty asset rows
+- `data-integrity/023-failed-liquidity-pool-ops-fabricate-native-reserves.md` — High — failed liquidity-pool deposit/withdraw rows serialize unknown reserve assets as fabricated `native/native`
 - `export-pipeline/019-config-parallel-compute-exports-empty-shell.md` — High — config-setting export drops `ledger_max_dependent_tx_clusters` from `CONFIG_SETTING_CONTRACT_PARALLEL_COMPUTE_V0`
 - `cli-commands/013-muxed-sac-transfer-effects-become-contract-effects.md` — High — muxed SAC transfer participants are exported as contract effects and attributed to the operation source account
 - `cli-commands/014-json-exporters-ignore-close-failures.md` — Medium — one-shot JSON export commands ignore writable file `Close()` errors and still report success before optional upload
@@ -129,3 +130,4 @@
 - `external-io/019-transaction-parquet-zeroes-absent-min-account-sequence.md` — High — transaction Parquet export encodes absent `min_account_sequence` as `0`, collapsing it with explicit `min_account_sequence=0`
 - `external-io/022-contract-code-parquet-drops-ledger-key-hash-base64.md` — High — contract-code Parquet export drops populated `ledger_key_hash_base_64` from every contract-code row
 - `data-integrity/022-offer-operation-details-price-rounded-to-zero.md` — Critical — offer-operation `details.price` parses `xdr.Price.String()` and silently rounds tiny non-zero prices down to `0`
+- `data-integrity/023-failed-liquidity-pool-ops-fabricate-native-reserves.md` — High — failed liquidity-pool deposit/withdraw rows serialize unknown reserve assets as fabricated `native/native`
