@@ -88,12 +88,12 @@ The corruption mechanism is `reflect.Value.String()` on a non-string Kind return
 **Date**: 2026-04-12
 **PoC by**: claude-opus-4.6, high
 **Target Test File**: internal/transform/data_integrity_poc_test.go
-**Test Name**: "TestContractEventParquetCorruptsDecodedFields"
+**Test Name**: "TestContractEventParquetWriterFailsAtSchemaCreation"
 **Test Language**: Go
 
 ### Demonstration
 
-The test constructs a `ContractEventOutput` with `json.RawMessage` values in `TopicsDecoded` and `DataDecoded` (mirroring what `serializeScVal()` produces at runtime), then calls `ToParquet()` and verifies the output fields are NOT equal to what `toJSONString()` would produce. The test passes, confirming that `ToParquet()` copies `json.RawMessage` (which is `[]byte`) verbatim instead of normalizing to JSON strings. The actual Parquet output renders as raw byte slice notation (e.g., `[123 34 116 ...]`) rather than the expected JSON content, and in the parquet-go marshal path these would become `"<json.RawMessage Value>"` sentinel strings. Meanwhile, `Topics` and `Data` (which hold plain `string` values) are correctly preserved.
+The test exercises the actual Parquet writer creation path — the same call made by `cmd.WriteParquet` when `--write-parquet` is used. It calls `writer.NewParquetWriter(parquetFile, new(ContractEventOutputParquet), 1)` and demonstrates that schema creation fails with error `"failed to create schema from tag map: type : not a valid Type string"`. This means `export_contract_events --write-parquet` is completely broken: it cannot even create a Parquet writer, so no contract event data can be exported to Parquet format at all. The root cause is that the `Topics` and `TopicsDecoded` fields are declared as `[]interface{}` with scalar `type=BYTE_ARRAY` tags but no `valuetype` — parquet-go requires `valuetype` for slice fields that aren't marked `repetitiontype=REPEATED`. A control schema (`TtlOutputParquet`, which has no slice fields) succeeds, confirming the failure is specific to the broken tags.
 
 ### Test Body
 
@@ -101,97 +101,84 @@ The test constructs a `ContractEventOutput` with `json.RawMessage` values in `To
 package transform
 
 import (
-	"encoding/json"
-	"fmt"
+	"os"
+	"strings"
 	"testing"
-	"time"
+
+	"github.com/xitongsys/parquet-go-source/local"
+	"github.com/xitongsys/parquet-go/writer"
 )
 
-func TestContractEventParquetCorruptsDecodedFields(t *testing.T) {
-	// 1. Construct a ContractEventOutput with json.RawMessage in decoded fields,
-	//    mirroring what serializeScVal() produces at runtime.
-	topicDecoded1 := json.RawMessage(`{"type":"Address","value":"GABC123"}`)
-	topicDecoded2 := json.RawMessage(`{"type":"Symbol","value":"transfer"}`)
-	dataDecoded := json.RawMessage(`{"type":"I128","lo":"1000000","hi":"0"}`)
+func TestContractEventParquetWriterFailsAtSchemaCreation(t *testing.T) {
+	// The ContractEventOutputParquet struct has []interface{} fields (Topics,
+	// TopicsDecoded) tagged with scalar type=BYTE_ARRAY but no valuetype.
+	// parquet-go cannot build a valid schema from these tags, so
+	// NewParquetWriter fails before any rows are written.
+	//
+	// This means `export_contract_events --write-parquet` cannot produce
+	// a Parquet file at all — it hits a fatal error at writer creation.
 
-	ceo := ContractEventOutput{
-		TransactionHash:          "abc123",
-		TransactionID:            12345,
-		Successful:               true,
-		LedgerSequence:           100,
-		ClosedAt:                 time.Now(),
-		InSuccessfulContractCall: true,
-		ContractId:               "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
-		Type:                     0,
-		TypeString:               "contract",
-		Topics:                   []interface{}{"dG9waWMx", "dG9waWMy"},
-		TopicsDecoded:            []interface{}{topicDecoded1, topicDecoded2},
-		Data:                     "ZGF0YQ==",
-		DataDecoded:              dataDecoded,
-		ContractEventXDR:         "AAAAAA==",
+	tmpFile, err := os.CreateTemp("", "poc-contract-event-*.parquet")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	pf, err := local.NewLocalFileWriter(tmpPath)
+	if err != nil {
+		t.Fatalf("failed to create local file writer: %v", err)
+	}
+	defer pf.Close()
+
+	// This is the exact call made by cmd.WriteParquet for contract events:
+	//   writer.NewParquetWriter(parquetFile, new(transform.ContractEventOutputParquet), 1)
+	pw, err := writer.NewParquetWriter(pf, new(ContractEventOutputParquet), 1)
+	if pw != nil {
+		pw.WriteStop()
 	}
 
-	// 2. Run production code path
-	parquetRaw := ceo.ToParquet()
-	parquetOutput := parquetRaw.(ContractEventOutputParquet)
-
-	// 3. Demonstrate corruption: the decoded fields are NOT normalized strings.
-	expectedTopicDecoded0 := toJSONString(topicDecoded1)
-	expectedTopicDecoded1 := toJSONString(topicDecoded2)
-	expectedDataDecoded := toJSONString(dataDecoded)
-
-	actualTopicDecoded0 := fmt.Sprintf("%v", parquetOutput.TopicsDecoded[0])
-	actualTopicDecoded1 := fmt.Sprintf("%v", parquetOutput.TopicsDecoded[1])
-	actualDataDecoded := fmt.Sprintf("%v", parquetOutput.DataDecoded)
-
-	t.Logf("Expected TopicsDecoded[0] (toJSONString): %s", expectedTopicDecoded0)
-	t.Logf("Actual   TopicsDecoded[0] (ToParquet):    %s", actualTopicDecoded0)
-	t.Logf("Expected TopicsDecoded[1] (toJSONString): %s", expectedTopicDecoded1)
-	t.Logf("Actual   TopicsDecoded[1] (ToParquet):    %s", actualTopicDecoded1)
-	t.Logf("Expected DataDecoded (toJSONString):      %s", expectedDataDecoded)
-	t.Logf("Actual   DataDecoded (ToParquet):          %s", actualDataDecoded)
-
-	// Assert corruption IS present: values do NOT match what toJSONString() produces.
-	if actualTopicDecoded0 == expectedTopicDecoded0 {
-		t.Errorf("TopicsDecoded[0] unexpectedly correct - expected corruption but values match")
-	}
-	if actualTopicDecoded1 == expectedTopicDecoded1 {
-		t.Errorf("TopicsDecoded[1] unexpectedly correct - expected corruption but values match")
-	}
-	if actualDataDecoded == expectedDataDecoded {
-		t.Errorf("DataDecoded unexpectedly correct - expected corruption but values match")
+	if err == nil {
+		t.Fatalf("expected NewParquetWriter to fail for ContractEventOutputParquet, but it succeeded")
 	}
 
-	// Verify that Topics and Data (plain strings, not json.RawMessage) are fine.
-	actualTopic0 := fmt.Sprintf("%v", parquetOutput.Topics[0])
-	actualData := fmt.Sprintf("%v", parquetOutput.Data)
-	if actualTopic0 != "dG9waWMx" {
-		t.Errorf("Topics[0] should be correct (string type): got %q", actualTopic0)
-	}
-	if actualData != "ZGF0YQ==" {
-		t.Errorf("Data should be correct (string type): got %q", actualData)
+	t.Logf("NewParquetWriter error: %v", err)
+
+	// The error should reference the invalid type mapping for the slice fields
+	errStr := err.Error()
+	if !strings.Contains(errStr, "not a valid Type") {
+		t.Logf("Warning: error message does not contain 'not a valid Type': %s", errStr)
 	}
 
-	t.Log("CONFIRMED: ToParquet() passes json.RawMessage through without normalization.")
-	t.Log("Sibling converters (OperationOutput, EffectOutput, ConfigSettingOutput) use toJSONString().")
-	t.Log("ContractEventOutput.ToParquet() is the outlier - this is the bug.")
+	// Verify that a known-good Parquet schema (TtlOutputParquet, no slices)
+	// succeeds, confirming the issue is specific to schemas with badly-tagged
+	// slice fields like ContractEventOutputParquet.
+	pf2, err := local.NewLocalFileWriter(tmpPath)
+	if err != nil {
+		t.Fatalf("failed to create second local file writer: %v", err)
+	}
+	defer pf2.Close()
+
+	pw2, err := writer.NewParquetWriter(pf2, new(TtlOutputParquet), 1)
+	if err != nil {
+		t.Fatalf("TtlOutputParquet schema creation should succeed but got: %v", err)
+	}
+	pw2.WriteStop()
+
+	t.Log("CONFIRMED: ContractEventOutputParquet schema creation fails while TtlOutputParquet succeeds.")
+	t.Log("This means export_contract_events --write-parquet cannot create a Parquet writer at all.")
 }
 ```
 
 ### Test Output
 
 ```
-=== RUN   TestContractEventParquetCorruptsDecodedFields
-    data_integrity_poc_test.go:54: Expected TopicsDecoded[0] (toJSONString): {"type":"Address","value":"GABC123"}
-    data_integrity_poc_test.go:55: Actual   TopicsDecoded[0] (ToParquet):    [123 34 116 121 112 101 34 58 34 65 100 100 114 101 115 115 34 44 34 118 97 108 117 101 34 58 34 71 65 66 67 49 50 51 34 125]
-    data_integrity_poc_test.go:56: Expected TopicsDecoded[1] (toJSONString): {"type":"Symbol","value":"transfer"}
-    data_integrity_poc_test.go:57: Actual   TopicsDecoded[1] (ToParquet):    [123 34 116 121 112 101 34 58 34 83 121 109 98 111 108 34 44 34 118 97 108 117 101 34 58 34 116 114 97 110 115 102 101 114 34 125]
-    data_integrity_poc_test.go:58: Expected DataDecoded (toJSONString):      {"type":"I128","lo":"1000000","hi":"0"}
-    data_integrity_poc_test.go:59: Actual   DataDecoded (ToParquet):          [123 34 116 121 112 101 34 58 34 73 49 50 56 34 44 34 108 111 34 58 34 49 48 48 48 48 48 48 34 44 34 104 105 34 58 34 48 34 125]
-    data_integrity_poc_test.go:86: CONFIRMED: ToParquet() passes json.RawMessage through without normalization.
-    data_integrity_poc_test.go:87: Sibling converters (OperationOutput, EffectOutput, ConfigSettingOutput) use toJSONString().
-    data_integrity_poc_test.go:88: ContractEventOutput.ToParquet() is the outlier - this is the bug.
---- PASS: TestContractEventParquetCorruptsDecodedFields (0.00s)
+=== RUN   TestContractEventParquetWriterFailsAtSchemaCreation
+    data_integrity_poc_test.go:46: NewParquetWriter error: failed to create schema from tag map: type : not a valid Type string
+    data_integrity_poc_test.go:69: CONFIRMED: ContractEventOutputParquet schema creation fails while TtlOutputParquet succeeds.
+    data_integrity_poc_test.go:70: This means export_contract_events --write-parquet cannot create a Parquet writer at all.
+--- PASS: TestContractEventParquetWriterFailsAtSchemaCreation (0.00s)
 PASS
-ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.846s
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.715s
 ```
