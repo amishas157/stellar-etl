@@ -72,3 +72,201 @@ Traced `GetTransactionEvents()` in the SDK (`go-stellar-sdk/ingest/ledger_transa
 - **Setup**: The existing V3 test fixture already demonstrates the issue. Create a focused test that (a) constructs a V3 Soroban transaction with 1 contract event in `SorobanMeta.Events` and the same event mirrored in `SorobanMeta.DiagnosticEvents`, (b) calls `TransformContractEvent()`, and (c) asserts the output length is 2 when it should be 1 (or verifies the duplication by comparing ContractEventXDR fields).
 - **Steps**: (1) Build SorobanTransactionMeta with Events=[E1] and DiagnosticEvents=[DiagWrap(E1)]. (2) Call TransformContractEvent. (3) Count output rows. (4) Compare ContractEventXDR values of the two rows — they will be identical (the existing test fixture at lines 73 and 90 shows this: both rows have the same ContractEventXDR base64 string).
 - **Assertion**: Assert that `len(output) == 2` (demonstrating the bug) when `len(SorobanMeta.Events) == 1` and `len(SorobanMeta.DiagnosticEvents) == 1` contain the same event. The correct behavior would be `len(output) == 1`.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestContractEventsDoubleCountMirroredDiagnostics"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a V3 Soroban transaction with exactly 1 contract event placed in both `SorobanMeta.Events` and `SorobanMeta.DiagnosticEvents` (mirroring what stellar-core produces with `ENABLE_SOROBAN_DIAGNOSTIC_EVENTS=true`). Calling `TransformContractEvent()` produces 2 output rows instead of 1. Both rows carry identical `ContractEventXDR` (`AAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAEAAAAAAAAAAQAAAAAAAAAB`), making them indistinguishable to downstream consumers. The only difference is the OperationEvents-sourced row has OperationID set while the DiagnosticEvents-sourced row does not — an unreliable discriminator since transaction-level events also lack OperationID.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/ingest"
+	"github.com/stellar/go-stellar-sdk/xdr"
+	"github.com/stellar/stellar-etl/v2/internal/utils"
+)
+
+// TestContractEventsDoubleCountMirroredDiagnostics demonstrates that
+// TransformContractEvent() produces 2 output rows for a single on-chain
+// contract event when the same event appears in both SorobanMeta.Events
+// and SorobanMeta.DiagnosticEvents (the standard layout when stellar-core
+// has ENABLE_SOROBAN_DIAGNOSTIC_EVENTS=true).
+//
+// The SDK documentation explicitly warns: "diagnostic events MAY include
+// contract events as well; users should be careful not to double count."
+// TransformContractEvent ignores this warning.
+func TestContractEventsDoubleCountMirroredDiagnostics(t *testing.T) {
+	// 1. Construct a single contract event
+	hardCodedBool := true
+	singleEvent := xdr.ContractEvent{
+		Ext:        xdr.ExtensionPoint{V: 0},
+		ContractId: &xdr.ContractId{},
+		Type:       xdr.ContractEventTypeDiagnostic,
+		Body: xdr.ContractEventBody{
+			V: 0,
+			V0: &xdr.ContractEventV0{
+				Topics: []xdr.ScVal{
+					{
+						Type: xdr.ScValTypeScvBool,
+						B:    &hardCodedBool,
+					},
+				},
+				Data: xdr.ScVal{
+					Type: xdr.ScValTypeScvBool,
+					B:    &hardCodedBool,
+				},
+			},
+		},
+	}
+
+	// 2. Place the SAME event in both SorobanMeta.Events (→ OperationEvents)
+	//    and SorobanMeta.DiagnosticEvents. This mirrors what stellar-core
+	//    produces when diagnostic events are enabled.
+	txMeta := xdr.TransactionMeta{
+		V: 3,
+		V3: &xdr.TransactionMetaV3{
+			SorobanMeta: &xdr.SorobanTransactionMeta{
+				Events:           []xdr.ContractEvent{singleEvent},
+				DiagnosticEvents: []xdr.DiagnosticEvent{{InSuccessfulContractCall: true, Event: singleEvent}},
+			},
+		},
+	}
+
+	hardCodedMemoText := "test"
+	destination := xdr.MuxedAccount{
+		Type:    xdr.CryptoKeyTypeKeyTypeEd25519,
+		Ed25519: &xdr.Uint256{1, 2, 3},
+	}
+
+	transaction := ingest.LedgerTransaction{
+		Index:      1,
+		UnsafeMeta: txMeta,
+		Envelope: xdr.TransactionEnvelope{
+			Type: xdr.EnvelopeTypeEnvelopeTypeTx,
+			V1: &xdr.TransactionV1Envelope{
+				Tx: xdr.Transaction{
+					Ext: xdr.TransactionExt{
+						V: 1,
+						SorobanData: &xdr.SorobanTransactionData{
+							Ext:         xdr.SorobanTransactionDataExt{},
+							Resources:   xdr.SorobanResources{},
+							ResourceFee: 0,
+						},
+					},
+					SourceAccount: testAccount1,
+					SeqNum:        1,
+					Memo: xdr.Memo{
+						Type: xdr.MemoTypeMemoText,
+						Text: &hardCodedMemoText,
+					},
+					Fee: 100,
+					Cond: xdr.Preconditions{
+						Type: xdr.PreconditionTypePrecondTime,
+						TimeBounds: &xdr.TimeBounds{
+							MinTime: 0,
+							MaxTime: 1594272628,
+						},
+					},
+					Operations: []xdr.Operation{
+						{
+							SourceAccount: &testAccount2,
+							Body: xdr.OperationBody{
+								Type: xdr.OperationTypePathPaymentStrictReceive,
+								PathPaymentStrictReceiveOp: &xdr.PathPaymentStrictReceiveOp{
+									Destination: destination,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Result: utils.CreateSampleResultMeta(false, 1).Result,
+	}
+
+	lhe := xdr.LedgerHeaderHistoryEntry{
+		Header: xdr.LedgerHeader{
+			LedgerSeq: 100,
+			ScpValue:  xdr.StellarValue{CloseTime: 1594272522},
+		},
+	}
+
+	// 3. Call the production code path
+	output, err := TransformContractEvent(transaction, lhe)
+	if err != nil {
+		t.Fatalf("TransformContractEvent returned unexpected error: %v", err)
+	}
+
+	// The input has exactly 1 unique on-chain event. Correct behavior would
+	// produce 1 output row. The bug causes 2 rows to be emitted.
+	uniqueEventCount := 1
+	if len(output) == uniqueEventCount {
+		t.Fatal("Expected duplication bug but output has correct count — hypothesis disproved")
+	}
+
+	// 4. Assert the duplication: 2 rows for 1 event
+	if len(output) != 2 {
+		t.Fatalf("Expected 2 output rows (demonstrating duplication), got %d", len(output))
+	}
+	t.Logf("BUG CONFIRMED: %d unique on-chain event produced %d output rows", uniqueEventCount, len(output))
+
+	// 5. Verify the two rows carry identical event payloads (same ContractEventXDR)
+	if output[0].ContractEventXDR == output[1].ContractEventXDR {
+		t.Logf("Both rows have identical ContractEventXDR: %s", output[0].ContractEventXDR)
+		t.Log("Downstream consumers cannot distinguish duplicates — double-counting is unavoidable")
+	} else {
+		t.Logf("Row 0 XDR: %s", output[0].ContractEventXDR)
+		t.Logf("Row 1 XDR: %s", output[1].ContractEventXDR)
+		t.Log("XDR differs due to DiagnosticEvent wrapper, but inner event payload is identical")
+	}
+
+	// Verify the OperationID pattern that distinguishes the sources
+	if output[0].OperationID.Valid && !output[1].OperationID.Valid {
+		t.Log("Row 0 (from OperationEvents): has OperationID")
+		t.Log("Row 1 (from DiagnosticEvents): no OperationID")
+	} else if !output[0].OperationID.Valid && output[1].OperationID.Valid {
+		t.Log("Row 0 (from DiagnosticEvents): no OperationID")
+		t.Log("Row 1 (from OperationEvents): has OperationID")
+	}
+
+	// Verify all other fields match (same event data)
+	if output[0].ContractId != output[1].ContractId {
+		t.Errorf("ContractId mismatch: %q vs %q", output[0].ContractId, output[1].ContractId)
+	}
+	if output[0].TypeString != output[1].TypeString {
+		t.Errorf("TypeString mismatch: %q vs %q", output[0].TypeString, output[1].TypeString)
+	}
+	if output[0].TransactionHash != output[1].TransactionHash {
+		t.Errorf("TransactionHash mismatch: %q vs %q", output[0].TransactionHash, output[1].TransactionHash)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestContractEventsDoubleCountMirroredDiagnostics
+    data_integrity_poc_test.go:133: BUG CONFIRMED: 1 unique on-chain event produced 2 output rows
+    data_integrity_poc_test.go:139: Both rows have identical ContractEventXDR: AAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAEAAAAAAAAAAQAAAAAAAAAB
+    data_integrity_poc_test.go:140: Downstream consumers cannot distinguish duplicates — double-counting is unavoidable
+    data_integrity_poc_test.go:150: Row 0 (from OperationEvents): has OperationID
+    data_integrity_poc_test.go:151: Row 1 (from DiagnosticEvents): no OperationID
+--- PASS: TestContractEventsDoubleCountMirroredDiagnostics (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.706s
+```
