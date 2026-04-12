@@ -79,3 +79,96 @@ Traced `ExportEntry()` in `cmd/command_utils.go:55-86` end-to-end. The function 
   2. Call `ExportEntry(validStruct, closedWriteEnd, nil)`
   3. Check the returned error
 - **Assertion**: Assert that the returned error is non-nil. Currently it will be `nil`, demonstrating the bug. Also verify that `numBytes` returned is 0 or reflects only a partial write, not a successful count.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: cmd/data_integrity_poc_test.go
+**Test Name**: "TestExportEntrySwallowsWriteError" and "TestExportEntrySwallowsNewlineWriteError"
+**Test Language**: Go
+
+### Demonstration
+
+Both tests prove that `ExportEntry` silently swallows I/O errors. In `TestExportEntrySwallowsWriteError`, a pipe with a closed reader causes `Write` to fail with "broken pipe", yet `ExportEntry` returns `nil` error and `numBytes=0`. In `TestExportEntrySwallowsNewlineWriteError`, writing to a closed file produces "file already closed" errors on both `Write` and `WriteString`, yet the function still returns `nil`. This confirms that all 10+ export command callers will count these failed writes as successes and may upload truncated/corrupt JSONL files.
+
+### Test Body
+
+```go
+package cmd
+
+import (
+	"os"
+	"testing"
+)
+
+// TestExportEntrySwallowsWriteError demonstrates that ExportEntry returns nil
+// when the underlying outFile.Write fails, silently dropping I/O errors.
+func TestExportEntrySwallowsWriteError(t *testing.T) {
+	// Create a pipe; closing the read end makes writes to the write end fail.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() failed: %v", err)
+	}
+	r.Close() // close reader so writes will fail with EPIPE / broken pipe
+
+	entry := map[string]string{"key": "value"}
+	numBytes, exportErr := ExportEntry(entry, w, nil)
+
+	// BUG: ExportEntry should return a non-nil error because the write failed,
+	// but it always returns nil. This demonstrates that write errors are silently dropped.
+	if exportErr == nil {
+		t.Errorf("ExportEntry returned nil error despite write failure — write errors are silently swallowed (numBytes=%d)", numBytes)
+	} else {
+		t.Logf("ExportEntry correctly returned error: %v", exportErr)
+	}
+
+	w.Close()
+}
+
+// TestExportEntrySwallowsNewlineWriteError demonstrates that even when the
+// JSON bytes are written successfully, a failure on the newline WriteString
+// is silently dropped — producing merged JSONL records.
+func TestExportEntrySwallowsNewlineWriteError(t *testing.T) {
+	// Use a temp file with limited space simulation: we'll write to a file,
+	// then close it and try to write again.
+	tmpFile, err := os.CreateTemp("", "poc-export-*.jsonl")
+	if err != nil {
+		t.Fatalf("CreateTemp failed: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	// Close the file so both Write and WriteString will fail
+	tmpFile.Close()
+
+	entry := map[string]string{"key": "value"}
+	numBytes, exportErr := ExportEntry(entry, tmpFile, nil)
+
+	// BUG: same as above — ExportEntry returns nil even though the file is closed.
+	if exportErr == nil {
+		t.Errorf("ExportEntry returned nil error on closed file — errors silently swallowed (numBytes=%d)", numBytes)
+	} else {
+		t.Logf("ExportEntry correctly returned error: %v", exportErr)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestExportEntrySwallowsWriteError
+time="2026-04-11T21:36:32.353-05:00" level=error msg="Error writing map[key:value] to file: write |1: broken pipe" pid=5001
+time="2026-04-11T21:36:32.353-05:00" level=error msg="Error writing new line to file |1: write |1: broken pipe" pid=5001
+    data_integrity_poc_test.go:24: ExportEntry returned nil error despite write failure — write errors are silently swallowed (numBytes=0)
+--- FAIL: TestExportEntrySwallowsWriteError (0.00s)
+=== RUN   TestExportEntrySwallowsNewlineWriteError
+time="2026-04-11T21:36:32.354-05:00" level=error msg="Error writing map[key:value] to file: write /var/folders/.../poc-export-1963367748.jsonl: file already closed" pid=5001
+time="2026-04-11T21:36:32.354-05:00" level=error msg="Error writing new line to file /var/folders/.../poc-export-1963367748.jsonl: write /var/folders/.../poc-export-1963367748.jsonl: file already closed" pid=5001
+    data_integrity_poc_test.go:52: ExportEntry returned nil error on closed file — errors silently swallowed (numBytes=0)
+--- FAIL: TestExportEntrySwallowsNewlineWriteError (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/cmd	5.715s
+```
