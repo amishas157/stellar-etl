@@ -103,6 +103,7 @@
 - `external-io/017-export-assets-zero-limit-emits-first-ledger-assets.md` — Medium — `export_assets --limit 0` still scans the first in-range ledger and can emit non-empty asset rows
 - `export-pipeline/019-config-parallel-compute-exports-empty-shell.md` — High — config-setting export drops `ledger_max_dependent_tx_clusters` from `CONFIG_SETTING_CONTRACT_PARALLEL_COMPUTE_V0`
 - `cli-commands/013-muxed-sac-transfer-effects-become-contract-effects.md` — High — muxed SAC transfer participants are exported as contract effects and attributed to the operation source account
+- `data-transform/034-muxed-sac-burn-sender-becomes-contract-effect.md` — High — muxed SAC burn senders are exported as contract effects and attributed to the operation source account
 - `data-transform/030-contract-event-parquet-schema-invalid.md` — Medium — `export_contract_events --write-parquet` cannot initialize its Parquet writer because `ContractEventOutputParquet` uses invalid repeated-field schema tags
 - `data-integrity/017-json-export-write-errors-are-silently-dropped.md` — Medium — `ExportEntry` logs failed JSON writes but returns `nil`, so exporters count dropped rows as successful
 - `export-pipeline/020-float64-stroop-json-rounding.md` — Critical — `ConvertStroopValueToReal` rounds large monetary values to the wrong exported JSON number
