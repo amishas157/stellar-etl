@@ -100,3 +100,4 @@
 - `external-io/013-trade-parquet-null-collapse.md` — High — trade Parquet export collapses nullable routing fields into zero values, including unrecoverable `seller_is_exact` collisions within offer trades
 - `external-io/014-sponsor-null-collapses-to-empty-string.md` — High — ledger-entry Parquet export rewrites null `sponsor` values to empty strings
 - `export-pipeline/019-config-parallel-compute-exports-empty-shell.md` — High — config-setting export drops `ledger_max_dependent_tx_clusters` from `CONFIG_SETTING_CONTRACT_PARALLEL_COMPUTE_V0`
+- `cli-commands/013-muxed-sac-transfer-effects-become-contract-effects.md` — High — muxed SAC transfer participants are exported as contract effects and attributed to the operation source account
