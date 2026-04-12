@@ -110,3 +110,4 @@
 - `data-transform/027-path-payment-operation-details-round-large-amounts.md` — Critical — path-payment `history_operations.details` amounts round distinct large stroop values together
 - `data-transform/028-offer-detail-amount-rounding.md` — Critical — offer-family `history_operations.details.amount` rounds distinct large order sizes together
 - `external-io/015-ledger-exports-accept-impossible-datastore-ranges.md` — Medium — `export_ledgers` and `export_token_transfer` accept impossible bounded ranges and emit empty success-shaped files
+- `data-transform/029-liquidity-pool-bound-rounding.md` — Critical — liquidity-pool `history_operations.details` request bounds round distinct large reserve limits together
