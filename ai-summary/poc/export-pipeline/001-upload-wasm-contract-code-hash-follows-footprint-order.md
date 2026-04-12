@@ -96,3 +96,186 @@ The `upload_wasm` case in `TransformOperation` (line 1114) and its method-receiv
   - A `HostFunction` of type `HostFunctionTypeUploadContractWasm` with WASM bytes whose SHA-256 equals `A`
 - **Steps**: Call `TransformOperation` with the constructed operation and transaction
 - **Assertion**: Assert that `details["contract_code_hash"]` equals `A` (the uploaded WASM's hash). Currently it will equal `B` (the first `ReadOnly` code key), demonstrating the bug.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestUploadWasmContractCodeHashFollowsFootprintOrder"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a Soroban `upload_wasm` transaction with WASM bytes whose SHA-256 is hash `A`, places an unrelated `ContractCode` key with hash `B` in the `ReadOnly` footprint, and the uploaded code's key with hash `A` in the `ReadWrite` footprint. When `TransformOperation` is called, `details["contract_code_hash"]` returns `B` (the ReadOnly key) instead of `A` (the uploaded WASM's hash), confirming that the exported hash follows footprint iteration order rather than the authoritative WASM payload.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/ingest"
+	"github.com/stellar/go-stellar-sdk/xdr"
+
+	"github.com/stellar/stellar-etl/v2/internal/utils"
+)
+
+// TestUploadWasmContractCodeHashFollowsFootprintOrder demonstrates that
+// upload_wasm operations report the wrong contract_code_hash when another
+// ContractCode key appears earlier in the transaction footprint.
+//
+// The authoritative hash should be sha256(WASM bytes) from the operation body,
+// but contractCodeHashFromTxEnvelope returns the first ContractCode key it
+// encounters scanning ReadOnly before ReadWrite. When an unrelated ContractCode
+// key sits in ReadOnly, it wins — producing a wrong hash.
+func TestUploadWasmContractCodeHashFollowsFootprintOrder(t *testing.T) {
+	// 1. Build WASM bytes and compute the authoritative hash (A)
+	wasmBytes := []byte("sample-wasm-payload-for-poc-test")
+	wasmSHA := sha256.Sum256(wasmBytes)
+	hashA := hex.EncodeToString(wasmSHA[:]) // the correct hash of the uploaded code
+
+	// 2. Create an unrelated contract code hash (B), different from A
+	var hashBBytes xdr.Hash
+	for i := range hashBBytes {
+		hashBBytes[i] = 0xBB // arbitrary, clearly different from wasmSHA
+	}
+	hashB := hex.EncodeToString(hashBBytes[:])
+
+	// Sanity: the two hashes must differ
+	if hashA == hashB {
+		t.Fatal("test setup error: hashA and hashB should differ")
+	}
+
+	// 3. Build the footprint: ReadOnly has hash B, ReadWrite has hash A
+	var hashAXdr xdr.Hash
+	copy(hashAXdr[:], wasmSHA[:])
+
+	footprint := xdr.LedgerFootprint{
+		ReadOnly: []xdr.LedgerKey{
+			{
+				Type: xdr.LedgerEntryTypeContractCode,
+				ContractCode: &xdr.LedgerKeyContractCode{
+					Hash: hashBBytes, // unrelated code — appears first
+				},
+			},
+		},
+		ReadWrite: []xdr.LedgerKey{
+			{
+				Type: xdr.LedgerEntryTypeContractCode,
+				ContractCode: &xdr.LedgerKeyContractCode{
+					Hash: hashAXdr, // the uploaded code's hash
+				},
+			},
+		},
+	}
+
+	// 4. Build the TransactionV1Envelope with Soroban data and the upload_wasm operation
+	uploadWasmOp := xdr.Operation{
+		SourceAccount: &genericSourceAccount,
+		Body: xdr.OperationBody{
+			Type: xdr.OperationTypeInvokeHostFunction,
+			InvokeHostFunctionOp: &xdr.InvokeHostFunctionOp{
+				HostFunction: xdr.HostFunction{
+					Type: xdr.HostFunctionTypeHostFunctionTypeUploadContractWasm,
+					Wasm: &wasmBytes,
+				},
+			},
+		},
+	}
+
+	envelope := xdr.TransactionV1Envelope{
+		Tx: xdr.Transaction{
+			SourceAccount: genericSourceAccount,
+			Memo:          xdr.Memo{},
+			Operations:    []xdr.Operation{uploadWasmOp},
+			Ext: xdr.TransactionExt{
+				V: 0,
+				SorobanData: &xdr.SorobanTransactionData{
+					Ext: xdr.SorobanTransactionDataExt{V: 0},
+					Resources: xdr.SorobanResources{
+						Footprint: footprint,
+					},
+					ResourceFee: 100,
+				},
+			},
+		},
+	}
+
+	// 5. Build a LedgerTransaction
+	ledgerTx := ingest.LedgerTransaction{
+		Index: 1,
+		Envelope: xdr.TransactionEnvelope{
+			Type: xdr.EnvelopeTypeEnvelopeTypeTx,
+			V1:   &envelope,
+		},
+		Result: utils.CreateSampleResultMeta(true, 10).Result,
+		UnsafeMeta: xdr.TransactionMeta{
+			V:  1,
+			V1: genericTxMeta,
+		},
+	}
+
+	ledgerCloseMeta := makeLedgerCloseMeta()
+
+	// 6. Call TransformOperation
+	output, err := TransformOperation(
+		uploadWasmOp,
+		0,
+		ledgerTx,
+		1, // ledgerSeq
+		ledgerCloseMeta,
+		"", // network
+	)
+	if err != nil {
+		t.Fatalf("TransformOperation returned unexpected error: %v", err)
+	}
+
+	// 7. Verify the bug: contract_code_hash should be hashA (the uploaded WASM's hash)
+	// but the current code returns hashB (the first ContractCode key in ReadOnly).
+	gotHash, ok := output.OperationDetails["contract_code_hash"].(string)
+	if !ok {
+		t.Fatalf("contract_code_hash not found or not a string in details: %v", output.OperationDetails)
+	}
+
+	// The authoritative hash of the uploaded WASM
+	t.Logf("Uploaded WASM sha256 (hashA): %s", hashA)
+	t.Logf("Unrelated ReadOnly code key  (hashB): %s", hashB)
+	t.Logf("Exported contract_code_hash:          %s", gotHash)
+
+	if gotHash == hashB {
+		t.Errorf("BUG CONFIRMED: contract_code_hash follows footprint order.\n"+
+			"  Got:  %s (hashB — from ReadOnly footprint, unrelated code)\n"+
+			"  Want: %s (hashA — sha256 of the uploaded WASM bytes)", gotHash, hashA)
+	} else if gotHash != hashA {
+		t.Errorf("contract_code_hash is neither hashA nor hashB.\n"+
+			"  Got:  %s\n"+
+			"  hashA (expected): %s\n"+
+			"  hashB (footprint): %s", gotHash, hashA, hashB)
+	} else {
+		t.Logf("contract_code_hash correctly matches uploaded WASM hash (hashA)")
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestUploadWasmContractCodeHashFollowsFootprintOrder
+    data_integrity_poc_test.go:132: Uploaded WASM sha256 (hashA): a377fd08b852879247907c7ffb6a3268bd524ecc7576461327e61e3f032d40b3
+    data_integrity_poc_test.go:133: Unrelated ReadOnly code key  (hashB): bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    data_integrity_poc_test.go:134: Exported contract_code_hash:          bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    data_integrity_poc_test.go:137: BUG CONFIRMED: contract_code_hash follows footprint order.
+          Got:  bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb (hashB — from ReadOnly footprint, unrelated code)
+          Want: a377fd08b852879247907c7ffb6a3268bd524ecc7576461327e61e3f032d40b3 (hashA — sha256 of the uploaded WASM bytes)
+--- FAIL: TestUploadWasmContractCodeHashFollowsFootprintOrder (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.852s
+```
