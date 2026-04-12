@@ -76,3 +76,138 @@ The bug is confirmed and the mechanism is exactly as described. Key observations
 - **Setup**: Construct an `xdr.MuxedAccount` of type `CryptoKeyTypeKeyTypeMuxedEd25519` with ID = `9007199254740993` (2^53 + 1). Build a mock trade claim with this muxed account as the buyer.
 - **Steps**: Call `tradeDetails(muxedBuyer, seller, claim)` to get `bd, sd`. Then JSON-marshal `sd` (or pass through `ExportEntry` round-trip).
 - **Assertion**: Assert that `sd["seller_muxed_id"]` is a `uint64` (not a string). Then assert that after `json.Marshal(sd)`, the output contains `"seller_muxed_id":9007199254740993` (bare number, no quotes). Finally, unmarshal that JSON with a standard decoder (no `UseNumber`) and assert that the float64 value does NOT equal the original `9007199254740993` — demonstrating precision loss. The fix would be to store `strconv.FormatUint(muxedAccountId, 10)` instead of the raw uint64 at `operation.go:437`.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestSellerMuxedIdJsonNumber"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a muxed account with ID 9007199254740993 (2^53 + 1), calls `addAccountAndMuxedAccountDetails` — the same production code path used by `tradeDetails()` for seller-side trade effects — and confirms three things: (1) the muxed ID is stored as raw `uint64` in the details map, (2) `json.Marshal` emits it as a bare number `9007199254740993` without quotes, and (3) a standard `json.Unmarshal` (float64-based) round-trip silently truncates the value to `9007199254740992`, proving 1-unit precision loss.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"strings"
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestSellerMuxedIdJsonNumber demonstrates that addAccountAndMuxedAccountDetails
+// stores muxed IDs as raw uint64, causing bare JSON numbers that lose precision
+// when parsed by standard float64-based JSON decoders.
+func TestSellerMuxedIdJsonNumber(t *testing.T) {
+	// 1. Construct a muxed account with ID > 2^53 (the float64 safe integer limit)
+	const muxedId uint64 = 9007199254740993 // 2^53 + 1
+
+	var ed25519Key xdr.Uint256
+	// Use a deterministic key (all zeros is fine for this test)
+	muxedAccount := xdr.MuxedAccount{
+		Type: xdr.CryptoKeyTypeKeyTypeMuxedEd25519,
+		Med25519: &xdr.MuxedAccountMed25519{
+			Id:      xdr.Uint64(muxedId),
+			Ed25519: ed25519Key,
+		},
+	}
+
+	// 2. Call the production code path
+	result := map[string]interface{}{}
+	err := addAccountAndMuxedAccountDetails(result, muxedAccount, "seller")
+	if err != nil {
+		t.Fatalf("addAccountAndMuxedAccountDetails failed: %v", err)
+	}
+
+	// 3a. Assert the stored value is uint64 (not string)
+	rawVal, ok := result["seller_muxed_id"]
+	if !ok {
+		t.Fatal("seller_muxed_id not found in result map")
+	}
+	storedUint, isUint64 := rawVal.(uint64)
+	if !isUint64 {
+		t.Fatalf("seller_muxed_id is %T, expected uint64 — the bug may have been fixed", rawVal)
+	}
+	if storedUint != muxedId {
+		t.Fatalf("seller_muxed_id value wrong: got %d, want %d", storedUint, muxedId)
+	}
+	t.Logf("seller_muxed_id stored as uint64: %d (confirms bare number will be emitted)", storedUint)
+
+	// 3b. JSON-marshal the map and verify the output is a bare number (no quotes)
+	jsonBytes, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+	jsonStr := string(jsonBytes)
+	t.Logf("JSON output: %s", jsonStr)
+
+	// The bare number pattern: "seller_muxed_id":9007199254740993 (no quotes around value)
+	barePattern := fmt.Sprintf(`"seller_muxed_id":%d`, muxedId)
+	quotedPattern := fmt.Sprintf(`"seller_muxed_id":"%d"`, muxedId)
+
+	if strings.Contains(jsonStr, quotedPattern) {
+		t.Fatal("seller_muxed_id is quoted as a string — the bug appears to be fixed")
+	}
+	if !strings.Contains(jsonStr, barePattern) {
+		t.Fatalf("Expected bare number pattern %q in JSON, got: %s", barePattern, jsonStr)
+	}
+	t.Log("Confirmed: seller_muxed_id is a bare JSON number (not quoted)")
+
+	// 3c. Demonstrate precision loss: unmarshal with standard float64 decoder
+	var parsed map[string]interface{}
+	err = json.Unmarshal(jsonBytes, &parsed)
+	if err != nil {
+		t.Fatalf("json.Unmarshal failed: %v", err)
+	}
+
+	// Standard json.Unmarshal decodes numbers as float64
+	floatVal, ok := parsed["seller_muxed_id"].(float64)
+	if !ok {
+		t.Fatalf("After standard unmarshal, seller_muxed_id is %T, expected float64", parsed["seller_muxed_id"])
+	}
+
+	// Convert back to uint64 to check precision
+	recoveredId := uint64(floatVal)
+	precisionLost := recoveredId != muxedId
+
+	t.Logf("Original muxed ID:  %d", muxedId)
+	t.Logf("After float64 round-trip: %d", recoveredId)
+	t.Logf("Precision lost: %v (diff = %d)", precisionLost, int64(muxedId)-int64(recoveredId))
+	t.Logf("Max safe integer (2^53): %d", uint64(math.Pow(2, 53)))
+
+	if !precisionLost {
+		t.Fatal("Expected precision loss but float64 preserved the value — hypothesis not demonstrated")
+	}
+
+	t.Log("BUG CONFIRMED: seller_muxed_id exported as bare JSON number loses precision in standard JSON parsers")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestSellerMuxedIdJsonNumber
+    data_integrity_poc_test.go:49: seller_muxed_id stored as uint64: 9007199254740993 (confirms bare number will be emitted)
+    data_integrity_poc_test.go:57: JSON output: {"seller":"GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF","seller_muxed":"MAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAGW72","seller_muxed_id":9007199254740993}
+    data_integrity_poc_test.go:69: Confirmed: seller_muxed_id is a bare JSON number (not quoted)
+    data_integrity_poc_test.go:88: Original muxed ID:  9007199254740993
+    data_integrity_poc_test.go:89: After float64 round-trip: 9007199254740992
+    data_integrity_poc_test.go:90: Precision lost: true (diff = 1)
+    data_integrity_poc_test.go:91: Max safe integer (2^53): 9007199254740992
+    data_integrity_poc_test.go:97: BUG CONFIRMED: seller_muxed_id exported as bare JSON number loses precision in standard JSON parsers
+--- PASS: TestSellerMuxedIdJsonNumber (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.961s
+```
