@@ -1,6 +1,6 @@
 # Failed Investigations: data-transform Subsystem
 
-Condensed failure summaries for investigations targeting the data-transform subsystem. Last updated 2026-04-11 (condensed 039–058).
+Condensed failure summaries for investigations targeting the data-transform subsystem. Last updated 2026-04-12 (condensed 059–078).
 
 ## Summary Table
 
