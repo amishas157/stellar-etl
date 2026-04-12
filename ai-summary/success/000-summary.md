@@ -115,3 +115,4 @@
 - `external-io/015-ledger-exports-accept-impossible-datastore-ranges.md` — Medium — `export_ledgers` and `export_token_transfer` accept impossible bounded ranges and emit empty success-shaped files
 - `data-transform/029-liquidity-pool-bound-rounding.md` — Critical — liquidity-pool `history_operations.details` request bounds round distinct large reserve limits together
 - `external-io/018-export-assets-accepts-impossible-datastore-ranges.md` — High — default datastore-backed `export_assets` accepts impossible bounded ranges and emits empty success-shaped output
+- `data-transform/031-extend-restore-footprint-exports-first-footprint-contract.md` — High — `extend_footprint_ttl` and `restore_footprint` export the first matching footprint contract as authoritative metadata
