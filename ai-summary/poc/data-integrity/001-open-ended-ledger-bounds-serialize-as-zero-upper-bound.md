@@ -97,3 +97,104 @@ Traced `TransformTransaction()` in `internal/transform/transaction.go` lines 90â
 - **Setup**: Create a test case similar to the existing V2 preconditions test but with `LedgerBounds: &xdr.LedgerBounds{MinLedger: 5, MaxLedger: 0}` (open-ended upper bound)
 - **Steps**: Call `TransformTransaction()` with the constructed transaction
 - **Assertion**: Assert that `output.LedgerBounds` equals `"[5,)"` (open-ended format matching `time_bounds` behavior), not `"[5,0)"` (the current buggy output)
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestOpenEndedLedgerBoundsSerializeAsZero"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a transaction with `PrecondV2.LedgerBounds{MinLedger: 5, MaxLedger: 0}` (XDR sentinel for "no upper bound") and calls `TransformTransaction()`. The output `LedgerBounds` field is `"[5,0)"` instead of the expected `"[5,)"`, proving that the ETL serializes the open-ended sentinel as a literal zero upper bound. This contrasts with `time_bounds` handling in the same function, which correctly outputs `"[%d,)"` when `MaxTime == 0`.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+
+	"github.com/stellar/stellar-etl/v2/internal/utils"
+
+	"github.com/stellar/go-stellar-sdk/ingest"
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestOpenEndedLedgerBoundsSerializeAsZero demonstrates that when a transaction
+// has PrecondV2 ledger bounds with MaxLedger == 0 (meaning "no upper bound"
+// per the XDR spec), TransformTransaction incorrectly serializes the bounds
+// as "[5,0)" instead of the open-ended format "[5,)".
+func TestOpenEndedLedgerBoundsSerializeAsZero(t *testing.T) {
+	// 1. Construct a transaction with open-ended ledger bounds (MaxLedger == 0)
+	envelope := xdr.TransactionV1Envelope{
+		Tx: xdr.Transaction{
+			SourceAccount: genericSourceAccount,
+			SeqNum:        1,
+			Fee:           100,
+			Memo:          xdr.Memo{Type: xdr.MemoTypeMemoNone},
+			Cond: xdr.Preconditions{
+				Type: xdr.PreconditionTypePrecondV2,
+				V2: &xdr.PreconditionsV2{
+					TimeBounds: &xdr.TimeBounds{
+						MinTime: 0,
+						MaxTime: 1594272628,
+					},
+					LedgerBounds: &xdr.LedgerBounds{
+						MinLedger: 5,
+						MaxLedger: 0, // XDR sentinel: means "no upper bound"
+					},
+				},
+			},
+			Operations: []xdr.Operation{
+				genericBumpOperationForTransaction,
+			},
+		},
+	}
+
+	tx := ingest.LedgerTransaction{
+		Index: 1,
+		Envelope: xdr.TransactionEnvelope{
+			Type: xdr.EnvelopeTypeEnvelopeTypeTx,
+			V1:   &envelope,
+		},
+		Result:   utils.CreateSampleResultMeta(true, 10).Result,
+		UnsafeMeta: xdr.TransactionMeta{
+			V:  1,
+			V1: genericTxMeta,
+		},
+	}
+
+	header := xdr.LedgerHeaderHistoryEntry{}
+
+	// 2. Run production code
+	output, err := TransformTransaction(tx, header)
+	if err != nil {
+		t.Fatalf("TransformTransaction returned unexpected error: %v", err)
+	}
+
+	// 3. Assert the output preserves the XDR semantics of open-ended bounds.
+	//    The time_bounds code already uses "[%d,)" for MaxTime == 0.
+	//    Ledger bounds should do the same for MaxLedger == 0.
+	expected := "[5,)"
+	if output.LedgerBounds != expected {
+		t.Errorf("LedgerBounds corrupted: got %q, want %q (MaxLedger==0 means no upper bound per XDR spec)", output.LedgerBounds, expected)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestOpenEndedLedgerBoundsSerializeAsZero
+    data_integrity_poc_test.go:69: LedgerBounds corrupted: got "[5,0)", want "[5,)" (MaxLedger==0 means no upper bound per XDR spec)
+--- FAIL: TestOpenEndedLedgerBoundsSerializeAsZero (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.822s
+```
