@@ -191,3 +191,33 @@ func TestManageSellOfferOmitsBuyingAsset(t *testing.T) {
 PASS
 ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.935s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-12
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Exercises claimed issue?** No. The PoC only shows that `TransformAsset()` returns the selling asset for a `ManageSellOffer`. It does not show that `export_assets` is contractually supposed to emit both assets from that operation.
+2. **Realistic preconditions?** Yes. A real `manage_sell_offer` always references both a selling and buying asset.
+3. **Bug or by design?** By design. The command, reader names, reader comments, transformer comment, and README all frame `export_assets` as a narrow asset-reference export derived from selected operations, not as a complete catalog of every asset mentioned by an operation. The implementation is consistently one-output-per-operation.
+4. **Impact/severity match?** Not applicable. Because the behavior is contractual, there is no confirmed corruption to score.
+5. **In scope?** The code path is in scope, but the reported "bug" is not: it is a feature-expansion argument about what `export_assets` ought to include.
+6. **Is the test correct?** No. It passes by construction because `TransformAsset` has signature `(AssetOutput, error)`. Re-calling the same function and observing the same selling asset does not prove silent corruption; it only restates the current API shape.
+7. **Alternative explanation?** Yes. `export_assets` intentionally records one representative asset per qualifying operation, and for `ManageSellOffer` that representative is the selling side.
+8. **Novelty?** Likely novel, but invalid.
+
+### Rejection Reason
+
+The PoC proves an implementation detail, not a contract violation. `export_assets` is intentionally narrow and currently models `ManageSellOffer` as contributing its selling asset only; there is no evidence in source, tests, or documentation that the buying side must also produce a `history_assets` row.
+
+### Failed Checks
+
+- 1
+- 3
+- 6
