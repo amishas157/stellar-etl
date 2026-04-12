@@ -243,3 +243,33 @@ func TestMissingTransformErrorCauseInExportLogs(t *testing.T) {
 PASS
 ok  	github.com/stellar/stellar-etl/v2/cmd	6.147s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-12
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Exercises claimed bug**: PARTIAL — source inspection confirms the four commands construct `fmt.Errorf(...)` values that drop the original `err`, and an independent logger-based PoC reproduced the resulting context-only log message. But the supplied PoC does not invoke the export commands themselves; it only recreates the formatting calls.
+2. **Realistic preconditions**: YES — `TransformTransaction()`, `TransformLedgerTransaction()`, `TransformAsset()`, and `TransformContractEvent()` all have real error returns, so these branches are reachable when a transform fails.
+3. **Bug vs by-design**: BUGLET — sibling commands include `%v`/`%s`, so the omission is best explained as a copy-paste mistake rather than an intentional logging contract.
+4. **Impact vs claimed severity**: FAIL — this does not change exported rows, suppress the failure count, or make the run appear successful. The command still logs each failed row context and emits `failed_transforms` in `PrintTransformStats`, so the omission is weaker than the Medium operational-correctness examples in scope.
+5. **In scope**: FAIL — the objective is silent data corruption or materially masked data loss. Here the transform failure itself is already surfaced; only the root-cause detail is missing. That is observability debt, not a demonstrated data-integrity bug.
+6. **Test correctness**: FAIL — the PoC passes by asserting properties of reconstructed `fmt.Errorf` strings, not by driving the production export loop or checking end-user CLI output from a real transform failure.
+7. **Alternative explanations**: YES — the observed behavior is fully explained by the missing `%v` placeholder, without any broader error-swallowing bug in the export pipeline.
+8. **Novelty**: NOVEL — but novelty alone does not make it an in-scope correctness finding.
+
+### Rejection Reason
+
+The code does drop the underlying transform error text from four log messages, but the export still visibly reports the failed row context and aggregate failure counts. That makes this a debugging/observability issue, not a concrete data-integrity or silent-failure bug under the stated review objective.
+
+### Failed Checks
+
+- 4. Impact vs claimed severity
+- 5. In scope
+- 6. Test correctness
