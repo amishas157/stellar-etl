@@ -79,3 +79,134 @@ The field `LedgerKeyHashBase64` is computed by both transform functions, stored 
 - **Setup**: Construct a `ContractDataOutput` with a non-empty `LedgerKeyHashBase64` value (reuse the value from `contract_data_test.go:163`)
 - **Steps**: Call `ToParquet()` on the struct, then use reflection to check if the returned `ContractDataOutputParquet` has a field named `LedgerKeyHashBase64`
 - **Assertion**: Assert that the Parquet struct either (a) currently lacks the field (demonstrating the bug), or (b) after the fix, contains the field with the same value as the JSON struct. Repeat for `ContractCodeOutput`.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestContractDataParquetDropsLedgerKeyHashBase64" and "TestContractCodeParquetDropsLedgerKeyHashBase64"
+**Test Language**: Go
+
+### Demonstration
+
+Both tests construct a JSON output struct with a non-empty `LedgerKeyHashBase64` value, call `ToParquet()`, and use reflection to confirm the returned Parquet struct type has no `LedgerKeyHashBase64` field. This proves the Parquet export path silently discards the base64-encoded ledger key for both contract-data and contract-code rows, while the JSON struct retains it. Since `LedgerKeyHash` is a one-way SHA256 hash, Parquet consumers irreversibly lose the ability to decode the original ledger key XDR.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"reflect"
+	"testing"
+	"time"
+)
+
+// TestContractDataParquetDropsLedgerKeyHashBase64 demonstrates that the
+// ContractDataOutputParquet struct has no field for LedgerKeyHashBase64,
+// so ToParquet() silently drops the value computed by TransformContractData.
+func TestContractDataParquetDropsLedgerKeyHashBase64(t *testing.T) {
+	// 1. Construct a ContractDataOutput with a non-empty LedgerKeyHashBase64
+	cdo := ContractDataOutput{
+		ContractId:          "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+		ContractKeyType:     "ScValTypeScvLedgerKeyContractInstance",
+		ContractDurability:  "ContractDataDurabilityPersistent",
+		LastModifiedLedger:  100,
+		LedgerEntryChange:   1,
+		Deleted:             false,
+		ClosedAt:            time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		LedgerSequence:      100,
+		LedgerKeyHash:       "abc123hash",
+		LedgerKeyHashBase64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM=", // non-empty value
+	}
+
+	// 2. Convert to Parquet via production code path
+	parquetRow := cdo.ToParquet()
+
+	// 3. Check that the Parquet struct type has no LedgerKeyHashBase64 field
+	parquetType := reflect.TypeOf(parquetRow)
+	_, hasField := parquetType.FieldByName("LedgerKeyHashBase64")
+	if hasField {
+		t.Skip("LedgerKeyHashBase64 field exists in ContractDataOutputParquet — bug may have been fixed")
+	}
+
+	// The Parquet struct lacks the field entirely, proving data is silently dropped
+	// Verify the JSON struct does have the field and it carries the value
+	jsonType := reflect.TypeOf(cdo)
+	jsonField, jsonHasField := jsonType.FieldByName("LedgerKeyHashBase64")
+	if !jsonHasField {
+		t.Fatal("ContractDataOutput unexpectedly missing LedgerKeyHashBase64 field")
+	}
+
+	jsonValue := reflect.ValueOf(cdo).FieldByName("LedgerKeyHashBase64").String()
+	if jsonValue == "" {
+		t.Fatal("LedgerKeyHashBase64 is empty in the JSON struct — test setup error")
+	}
+
+	t.Errorf("BUG CONFIRMED: ContractDataOutput has LedgerKeyHashBase64 (json tag: %q, value: %q) "+
+		"but ContractDataOutputParquet has no corresponding field — Parquet export silently drops this data",
+		jsonField.Tag.Get("json"), jsonValue)
+}
+
+// TestContractCodeParquetDropsLedgerKeyHashBase64 demonstrates the same
+// silent data drop for ContractCodeOutput → ContractCodeOutputParquet.
+func TestContractCodeParquetDropsLedgerKeyHashBase64(t *testing.T) {
+	// 1. Construct a ContractCodeOutput with a non-empty LedgerKeyHashBase64
+	cco := ContractCodeOutput{
+		ContractCodeHash:    "deadbeef",
+		ContractCodeExtV:    0,
+		LastModifiedLedger:  200,
+		LedgerEntryChange:   1,
+		Deleted:             false,
+		ClosedAt:            time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
+		LedgerSequence:      200,
+		LedgerKeyHash:       "def456hash",
+		LedgerKeyHashBase64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM=", // non-empty value
+		NInstructions:       10,
+		NFunctions:          5,
+	}
+
+	// 2. Convert to Parquet via production code path
+	parquetRow := cco.ToParquet()
+
+	// 3. Check that the Parquet struct type has no LedgerKeyHashBase64 field
+	parquetType := reflect.TypeOf(parquetRow)
+	_, hasField := parquetType.FieldByName("LedgerKeyHashBase64")
+	if hasField {
+		t.Skip("LedgerKeyHashBase64 field exists in ContractCodeOutputParquet — bug may have been fixed")
+	}
+
+	// Verify the JSON struct does have the field
+	jsonType := reflect.TypeOf(cco)
+	jsonField, jsonHasField := jsonType.FieldByName("LedgerKeyHashBase64")
+	if !jsonHasField {
+		t.Fatal("ContractCodeOutput unexpectedly missing LedgerKeyHashBase64 field")
+	}
+
+	jsonValue := reflect.ValueOf(cco).FieldByName("LedgerKeyHashBase64").String()
+	if jsonValue == "" {
+		t.Fatal("LedgerKeyHashBase64 is empty in the JSON struct — test setup error")
+	}
+
+	t.Errorf("BUG CONFIRMED: ContractCodeOutput has LedgerKeyHashBase64 (json tag: %q, value: %q) "+
+		"but ContractCodeOutputParquet has no corresponding field — Parquet export silently drops this data",
+		jsonField.Tag.Get("json"), jsonValue)
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestContractDataParquetDropsLedgerKeyHashBase64
+    data_integrity_poc_test.go:50: BUG CONFIRMED: ContractDataOutput has LedgerKeyHashBase64 (json tag: "ledger_key_hash_base_64", value: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM=") but ContractDataOutputParquet has no corresponding field — Parquet export silently drops this data
+--- FAIL: TestContractDataParquetDropsLedgerKeyHashBase64 (0.00s)
+=== RUN   TestContractCodeParquetDropsLedgerKeyHashBase64
+    data_integrity_poc_test.go:95: BUG CONFIRMED: ContractCodeOutput has LedgerKeyHashBase64 (json tag: "ledger_key_hash_base_64", value: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM=") but ContractCodeOutputParquet has no corresponding field — Parquet export silently drops this data
+--- FAIL: TestContractCodeParquetDropsLedgerKeyHashBase64 (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.796s
+```
