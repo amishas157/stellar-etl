@@ -1,20 +1,20 @@
 {
   "hypothesis_viable": 376,
   "hypothesis_not_viable": 198,
-  "review_viable": 147,
+  "review_viable": 148,
   "review_not_viable": 160,
   "poc_viable": 147,
   "poc_not_viable": 0,
   "final_review_viable": 115,
-  "final_review_not_viable": 29,
+  "final_review_not_viable": 30,
   "final_review_revisions": 8,
   "condensations": 9,
   "publishes": 116,
   "agent_failures": 55,
   "agent_timeouts": 0,
-  "total_spawned": 883,
+  "total_spawned": 885,
   "input_tokens": 0,
-  "output_tokens": 10224011,
+  "output_tokens": 10238452,
   "cache_read_tokens": 0,
   "per_subsystem": {
     "data-integrity": {
@@ -49,10 +49,10 @@
       "hypothesis_viable": 109,
       "hypothesis_not_viable": 58,
       "review_not_viable": 54,
-      "review_viable": 39,
+      "review_viable": 40,
       "poc_viable": 41,
       "final_review_viable": 29,
-      "final_review_not_viable": 9,
+      "final_review_not_viable": 10,
       "final_review_revisions": 5
     },
     "cli-commands": {
@@ -97,11 +97,11 @@
       "hypothesis_viable": 376,
       "agent_failures": 16,
       "final_review_viable": 115,
-      "final_review_not_viable": 29,
+      "final_review_not_viable": 30,
       "final_review_revisions": 8
     },
     "claude-opus-4-6": {
-      "review_viable": 147,
+      "review_viable": 148,
       "poc_viable": 147,
       "review_not_viable": 160,
       "agent_failures": 38
@@ -118,7 +118,7 @@
     },
     "reviewer": {
       "input": 0,
-      "output": 2316044,
+      "output": 2322903,
       "cache_read": 0
     },
     "poc": {
@@ -128,7 +128,7 @@
     },
     "final_review": {
       "input": 0,
-      "output": 2027780,
+      "output": 2035362,
       "cache_read": 0
     },
     "publish": {
@@ -145,12 +145,12 @@
   "tokens_by_model": {
     "gpt-5.4": {
       "input": 0,
-      "output": 5469422,
+      "output": 5477004,
       "cache_read": 0
     },
     "claude-opus-4-6": {
       "input": 0,
-      "output": 4147017,
+      "output": 4153876,
       "cache_read": 0
     },
     "claude-sonnet-4-6": {
@@ -160,16 +160,6 @@
     }
   },
   "agent_durations": [
-    [
-      "final_review",
-      "gpt-5.4",
-      178.5
-    ],
-    [
-      "reviewer",
-      "claude-opus-4-6",
-      168.5
-    ],
     [
       "publish",
       "claude-sonnet-4-6",
@@ -1159,6 +1149,16 @@
       "poc",
       "claude-opus-4-6",
       150.4
+    ],
+    [
+      "reviewer",
+      "claude-opus-4-6",
+      150.6
+    ],
+    [
+      "final_review",
+      "gpt-5.4",
+      180.3
     ]
   ],
   "costs": {
@@ -1167,10 +1167,10 @@
         "models": {
           "claude-opus-4-6": {
             "input_tokens": 0,
-            "output_tokens": 4147017,
+            "output_tokens": 4153876,
             "cache_read_tokens": 0,
-            "total_cost": 44.28,
-            "premium_requests": 1476
+            "total_cost": 44.37,
+            "premium_requests": 1479
           },
           "claude-sonnet-4-6": {
             "input_tokens": 0,
@@ -1181,16 +1181,16 @@
           },
           "gpt-5.4": {
             "input_tokens": 0,
-            "output_tokens": 5469422,
+            "output_tokens": 5477004,
             "cache_read_tokens": 0,
-            "total_cost": 7.89,
-            "premium_requests": 263
+            "total_cost": 7.92,
+            "premium_requests": 264
           }
         },
-        "provider_cost": 55.95
+        "provider_cost": 56.07
       }
     },
-    "total_cost": 55.95,
+    "total_cost": 56.07,
     "stages": {
       "hypothesis": {
         "copilot": {
@@ -1202,8 +1202,8 @@
       "reviewer": {
         "copilot": {
           "input_tokens": 0,
-          "output_tokens": 2316044,
-          "premium_requests": 987
+          "output_tokens": 2322903,
+          "premium_requests": 990
         }
       },
       "poc": {
@@ -1216,8 +1216,8 @@
       "final_review": {
         "copilot": {
           "input_tokens": 0,
-          "output_tokens": 2027780,
-          "premium_requests": 168
+          "output_tokens": 2035362,
+          "premium_requests": 169
         }
       },
       "publish": {

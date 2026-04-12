@@ -270,3 +270,33 @@ func TestContractEventsDoubleCountMirroredDiagnostics(t *testing.T) {
 PASS
 ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.706s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-12
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Exercises claimed bug**: YES — the PoC correctly drives `TransformContractEvent()` with one `SorobanMeta.Events` entry and one mirrored `SorobanMeta.DiagnosticEvents` entry, and the transform emits two rows.
+2. **Realistic preconditions**: YES — the SDK explicitly warns that diagnostic events may include contract events when txmeta is produced with that configuration.
+3. **Bug vs by-design**: BY DESIGN — the transform, schema, and export surface all explicitly define this dataset as a combined export of contract events and diagnostic events, not a deduplicated unique-event table. `contract_events.go` says it "converts a transaction's contract events and diagnostic events", `schema.go` and `schema_parquet.go` describe the output as representing both categories, and the existing golden test in `contract_events_test.go` intentionally expects the mirrored V3 case to produce two rows.
+4. **Impact/severity**: NONE AS A FINDING — the PoC shows two exported source-stream entries, but under the repository's stated contract those are not corrupted duplicates. One row is operation-scoped (`operation_id` set) and the other is transaction-scoped (`operation_id` null), matching the upstream `GetTransactionEvents()` split between `OperationEvents` and `DiagnosticEvents`.
+5. **In scope**: WOULD BE IN SCOPE if it were unintended data corruption, but the observed behavior matches the current export contract.
+6. **Test correctness**: PARTIALLY CORRECT — the test proves the current behavior, but its conclusion assumes the table should deduplicate across source streams. The repository does not promise that.
+7. **Alternative explanation**: PRESENT — the two rows are separate exports of two distinct txmeta arrays, not silent duplication introduced by ETL logic. The upstream ingest API exposes them separately and the ETL deliberately preserves that distinction.
+8. **Novelty**: NOVEL ENOUGH, but still not a valid defect.
+
+### Rejection Reason
+
+The PoC demonstrates **documented, test-covered behavior**, not a data-integrity bug. This codebase intentionally exports both contract events and diagnostic events into the same contract-events dataset, and mirrored diagnostic rows are already encoded in `internal/transform/contract_events_test.go` as expected output.
+
+### Failed Checks
+
+- 3
+- 4
+- 7
