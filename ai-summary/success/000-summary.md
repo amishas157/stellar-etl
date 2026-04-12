@@ -103,6 +103,7 @@
 - `cli-commands/013-muxed-sac-transfer-effects-become-contract-effects.md` — High — muxed SAC transfer participants are exported as contract effects and attributed to the operation source account
 - `data-integrity/017-json-export-write-errors-are-silently-dropped.md` — Medium — `ExportEntry` logs failed JSON writes but returns `nil`, so exporters count dropped rows as successful
 - `export-pipeline/020-float64-stroop-json-rounding.md` — Critical — `ConvertStroopValueToReal` rounds large monetary values to the wrong exported JSON number
+- `export-pipeline/023-upload-wasm-contract-code-hash-follows-footprint-order.md` — High — `upload_wasm` operation details export the first footprint code hash instead of the uploaded WASM hash
 - `export-pipeline/022-protocol20-fee-bump-fee-charged-drops-inclusion-fee.md` — Critical — protocol-20 fee-bump Soroban exports underreport `fee_charged` by dropping `inclusion_fee_charged` from the recomputation
 - `export-pipeline/021-ledger-entry-batches-leak-file-descriptors.md` — Medium — `export_ledger_entry_changes` leaks two JSON file descriptors per new batch/resource output and can stop later exports at the OS FD limit
 - `data-integrity/018-trustline-asset-id-hashes-raw-enum.md` — High — `trust_lines.asset_id` hashes the raw XDR enum name instead of the exported canonical asset type, so identical assets get different IDs across tables
