@@ -78,3 +78,138 @@ A JSON parser reading this would fail immediately on the first line.
 - **Setup**: Create a temporary config file. Set `cfgFile` package variable (or use `--config` flag) to point to it. Set up the command with `-o ""` and valid start/end times that can be mocked.
 - **Steps**: Capture stdout during command execution. Parse stdout as JSON.
 - **Assertion**: Assert that `json.Unmarshal(stdout_bytes, &result)` fails when a config file is present, demonstrating the banner corruption. Alternatively, assert that stdout contains more than one line or that the first line is not valid JSON.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: cmd/data_integrity_poc_test.go
+**Test Name**: "TestConfigBannerCorruptsLedgerRangeStdout"
+**Test Language**: Go
+
+### Demonstration
+
+The test creates a temporary Viper config file, sets the package-level `cfgFile` variable to point at it, then captures `os.Stdout` during execution of `initConfig()` followed by the JSON output path from `get_ledger_range_from_times`. It proves that stdout contains two lines — a non-JSON banner followed by valid JSON — and that `json.Unmarshal` on the full stdout fails with `invalid character 'U' looking for beginning of value`, confirming that any downstream JSON parser would reject this output.
+
+### Test Body
+
+```go
+package cmd
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/spf13/viper"
+)
+
+// TestConfigBannerCorruptsLedgerRangeStdout demonstrates that initConfig()
+// prints a "Using config file: ..." banner to stdout via fmt.Println, which
+// corrupts the machine-readable JSON output of get_ledger_range_from_times
+// when it writes to stdout (i.e., when -o "" is used).
+func TestConfigBannerCorruptsLedgerRangeStdout(t *testing.T) {
+	// 1. Create a temporary config file that Viper can read
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "test-config.yaml")
+	err := os.WriteFile(cfgPath, []byte("some_key: some_value\n"), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Save original state
+	oldCfgFile := cfgFile
+	oldStdout := os.Stdout
+	defer func() {
+		cfgFile = oldCfgFile
+		os.Stdout = oldStdout
+		viper.Reset()
+	}()
+
+	// 2. Capture stdout via a pipe
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+
+	// 3. Point cfgFile at our temp config and run initConfig
+	cfgFile = cfgPath
+	viper.Reset()
+	initConfig()
+
+	// 4. Simulate the command's stdout JSON output path (get_ledger_range_from_times.go:79-80)
+	result := ledgerRange{Start: 22343680, End: 22343743}
+	marshalled, _ := json.Marshal(result)
+	fmt.Println(string(marshalled))
+
+	// 5. Close writer and read captured output
+	w.Close()
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	capturedOutput := buf.String()
+
+	// Restore stdout so t.Log works
+	os.Stdout = oldStdout
+
+	// 6. Assert: stdout is corrupted — it's not valid JSON
+	lines := strings.Split(strings.TrimSpace(capturedOutput), "\n")
+
+	// There should be at least two lines: banner + JSON
+	if len(lines) < 2 {
+		t.Fatalf("Expected multiple lines in stdout (banner + JSON), got %d line(s):\n%s", len(lines), capturedOutput)
+	}
+
+	// The first line should be the config banner, not JSON
+	if !strings.HasPrefix(lines[0], "Using config file:") {
+		t.Fatalf("Expected first line to be config banner, got: %q", lines[0])
+	}
+
+	// The full stdout output should fail JSON parsing
+	var parsed interface{}
+	parseErr := json.Unmarshal([]byte(capturedOutput), &parsed)
+	if parseErr == nil {
+		t.Fatal("Expected full stdout to be invalid JSON due to config banner, but json.Unmarshal succeeded")
+	}
+
+	// Verify the JSON line itself is valid (the data is correct, just the stream is corrupted)
+	var rangeResult ledgerRange
+	err = json.Unmarshal([]byte(lines[1]), &rangeResult)
+	if err != nil {
+		t.Fatalf("Expected second line to be valid JSON, but got error: %v", err)
+	}
+	if rangeResult.Start != 22343680 || rangeResult.End != 22343743 {
+		t.Fatalf("JSON data itself is wrong: got %+v", rangeResult)
+	}
+
+	t.Logf("DEMONSTRATED: stdout output is corrupted by config banner")
+	t.Logf("Full stdout:\n%s", capturedOutput)
+	t.Logf("Line 1 (banner): %s", lines[0])
+	t.Logf("Line 2 (JSON):   %s", lines[1])
+	t.Logf("json.Unmarshal(full_stdout) error: %v", parseErr)
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestConfigBannerCorruptsLedgerRangeStdout
+    data_integrity_poc_test.go:94: DEMONSTRATED: stdout output is corrupted by config banner
+    data_integrity_poc_test.go:95: Full stdout:
+        Using config file: /var/folders/.../test-config.yaml
+        {"start":22343680,"end":22343743}
+    data_integrity_poc_test.go:96: Line 1 (banner): Using config file: /var/folders/.../test-config.yaml
+    data_integrity_poc_test.go:97: Line 2 (JSON):   {"start":22343680,"end":22343743}
+    data_integrity_poc_test.go:98: json.Unmarshal(full_stdout) error: invalid character 'U' looking for beginning of value
+--- PASS: TestConfigBannerCorruptsLedgerRangeStdout (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/cmd	1.725s
+```
