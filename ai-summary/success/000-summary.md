@@ -107,3 +107,4 @@
 - `export-pipeline/022-protocol20-fee-bump-fee-charged-drops-inclusion-fee.md` — Critical — protocol-20 fee-bump Soroban exports underreport `fee_charged` by dropping `inclusion_fee_charged` from the recomputation
 - `export-pipeline/021-ledger-entry-batches-leak-file-descriptors.md` — Medium — `export_ledger_entry_changes` leaks two JSON file descriptors per new batch/resource output and can stop later exports at the OS FD limit
 - `data-integrity/018-trustline-asset-id-hashes-raw-enum.md` — High — `trust_lines.asset_id` hashes the raw XDR enum name instead of the exported canonical asset type, so identical assets get different IDs across tables
+- `data-transform/027-path-payment-operation-details-round-large-amounts.md` — Critical — path-payment `history_operations.details` amounts round distinct large stroop values together
