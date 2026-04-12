@@ -170,3 +170,217 @@ func TestTransactionPreconditionNullCollapseInParquet(t *testing.T) {
 --- FAIL: TestTransactionPreconditionNullCollapseInParquet (0.00s)
 FAIL
 ```
+
+---
+
+## Final Review — Needs Revision
+
+**Date**: 2026-04-12
+**Final review by**: gpt-5.4, high
+
+### What Needs Fixing
+
+The PoC correctly shows that `TransactionOutput.ToParquet()` mechanically flattens `null.Int` to `0`, but the current finding overclaims impact for `min_account_sequence_age` and `min_account_sequence_ledger_gap`. Upstream Stellar code treats zero-valued age/gap preconditions as default no-op values rather than meaningful distinct state: `txnbuild.Preconditions.hasV2Conditions()` only considers those fields when they are `> 0`, and Horizon's resource adapter intentionally omits age `"0"` and tests that ledger-gap `0` should not appear in the rendered preconditions object.
+
+The remaining potentially real issue is narrower: `min_account_sequence` is different, because upstream preserves an explicit `0` when it is actually set (`PopulateTransaction()` emits it whenever the field is valid). The current test does not isolate that narrower case, so it is not sufficient for confirmation as written.
+
+### Revision Instructions
+
+Narrow the hypothesis to `min_account_sequence` unless you can show a concrete downstream contract where age/gap `0` and absent are semantically distinct. Rewrite the PoC to build realistic transactions through `TransformTransaction()`: one transaction with no `MinSeqNum`, and one `PRECOND_V2` transaction with `MinSeqNum` explicitly set to `0`. Then show that JSON/upstream semantics preserve `null` vs `0` for `MinAccountSequence`, while `ToParquet()` collapses both to `0`.
+
+### Checks Passed So Far
+
+- The code path exists: `TransformTransaction()` produces nullable `MinAccountSequence*` fields and `ToParquet()` flattens them with `.Int64`.
+- The current PoC reproduces the null-to-zero collapse mechanically.
+- The adversarial challenge failed for age/gap because upstream behavior provides a benign explanation: zero is normalized as an empty/default precondition there.
+
+---
+
+## PoC Attempt (Revision)
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestTransactionMinAccountSequenceNullCollapseInParquet"
+**Test Language**: Go
+
+### Demonstration
+
+The revised test narrows the hypothesis to `MinAccountSequence` only and exercises the full production code path via `TransformTransaction()`. Two realistic `PRECOND_V2` transactions are constructed: one with `MinSeqNum` absent (nil pointer in the XDR `PreconditionsV2`) and one with `MinSeqNum` explicitly set to `0`. `TransformTransaction()` produces `null.Int{}` (Valid=false) for the absent case and `null.IntFrom(0)` for the explicit-zero case. JSON serialization preserves the distinction (`"min_account_sequence":null` vs `"min_account_sequence":0`), but `ToParquet()` collapses both to `int64(0)`, proving the information loss through the production transform pipeline.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"encoding/json"
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/ingest"
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestTransactionMinAccountSequenceNullCollapseInParquet demonstrates that
+// TransformTransaction().ToParquet() collapses absent (null) MinAccountSequence
+// to 0, making it indistinguishable from an explicitly-set MinSeqNum of 0 in
+// a PRECOND_V2 transaction.
+//
+// Upstream Stellar semantics distinguish nil MinSeqNum (not set) from *0
+// (explicitly set to zero). JSON output preserves this via null.Int marshaling
+// (null vs 0). Parquet loses it because ToParquet() reads .Int64 unconditionally.
+func TestTransactionMinAccountSequenceNullCollapseInParquet(t *testing.T) {
+	hardCodedTransactionHash := xdr.Hash([32]byte{0x01})
+	genericResultResults := &[]xdr.OperationResult{
+		{
+			Tr: &xdr.OperationResultTr{
+				Type:                xdr.OperationTypeCreateAccount,
+				CreateAccountResult: &xdr.CreateAccountResult{Code: 0},
+			},
+		},
+	}
+	meta := xdr.TransactionMeta{
+		V:  1,
+		V1: genericTxMeta,
+	}
+	lhe := xdr.LedgerHeaderHistoryEntry{
+		Header: xdr.LedgerHeader{
+			LedgerSeq: 100,
+		},
+	}
+
+	// Transaction 1: PRECOND_V2 with MinSeqNum absent (nil pointer)
+	txAbsent := ingest.LedgerTransaction{
+		Index:      1,
+		UnsafeMeta: meta,
+		Envelope: xdr.TransactionEnvelope{
+			Type: xdr.EnvelopeTypeEnvelopeTypeTx,
+			V1: &xdr.TransactionV1Envelope{
+				Tx: xdr.Transaction{
+					SourceAccount: testAccount1,
+					SeqNum:        1,
+					Fee:           100,
+					Cond: xdr.Preconditions{
+						Type: xdr.PreconditionTypePrecondV2,
+						V2: &xdr.PreconditionsV2{
+							// MinSeqNum is nil — absent
+						},
+					},
+					Operations: []xdr.Operation{
+						{
+							Body: xdr.OperationBody{
+								Type:           xdr.OperationTypeBumpSequence,
+								BumpSequenceOp: &xdr.BumpSequenceOp{BumpTo: 1},
+							},
+						},
+					},
+				},
+			},
+		},
+		Result: xdr.TransactionResultPair{
+			TransactionHash: hardCodedTransactionHash,
+			Result: xdr.TransactionResult{
+				FeeCharged: 100,
+				Result: xdr.TransactionResultResult{
+					Code:    xdr.TransactionResultCodeTxSuccess,
+					Results: genericResultResults,
+				},
+			},
+		},
+	}
+
+	// Transaction 2: PRECOND_V2 with MinSeqNum explicitly set to 0
+	explicitZeroSeqNum := xdr.SequenceNumber(0)
+	txExplicitZero := ingest.LedgerTransaction{
+		Index:      2,
+		UnsafeMeta: meta,
+		Envelope: xdr.TransactionEnvelope{
+			Type: xdr.EnvelopeTypeEnvelopeTypeTx,
+			V1: &xdr.TransactionV1Envelope{
+				Tx: xdr.Transaction{
+					SourceAccount: testAccount1,
+					SeqNum:        1,
+					Fee:           100,
+					Cond: xdr.Preconditions{
+						Type: xdr.PreconditionTypePrecondV2,
+						V2: &xdr.PreconditionsV2{
+							MinSeqNum: &explicitZeroSeqNum, // explicitly 0
+						},
+					},
+					Operations: []xdr.Operation{
+						{
+							Body: xdr.OperationBody{
+								Type:           xdr.OperationTypeBumpSequence,
+								BumpSequenceOp: &xdr.BumpSequenceOp{BumpTo: 1},
+							},
+						},
+					},
+				},
+			},
+		},
+		Result: xdr.TransactionResultPair{
+			TransactionHash: hardCodedTransactionHash,
+			Result: xdr.TransactionResult{
+				FeeCharged: 100,
+				Result: xdr.TransactionResultResult{
+					Code:    xdr.TransactionResultCodeTxSuccess,
+					Results: genericResultResults,
+				},
+			},
+		},
+	}
+
+	// Run both through production TransformTransaction()
+	absentOutput, err := TransformTransaction(txAbsent, lhe)
+	if err != nil {
+		t.Fatalf("TransformTransaction (absent MinSeqNum): %v", err)
+	}
+	explicitOutput, err := TransformTransaction(txExplicitZero, lhe)
+	if err != nil {
+		t.Fatalf("TransformTransaction (explicit-zero MinSeqNum): %v", err)
+	}
+
+	// Verify the JSON output preserves the distinction
+	type minSeqJSON struct {
+		MinAccountSequence *int64 `json:"min_account_sequence"`
+	}
+
+	absentJSON, _ := json.Marshal(absentOutput)
+	explicitJSON, _ := json.Marshal(explicitOutput)
+
+	var absentParsed, explicitParsed minSeqJSON
+	json.Unmarshal(absentJSON, &absentParsed)
+	json.Unmarshal(explicitJSON, &explicitParsed)
+
+	if absentParsed.MinAccountSequence != nil {
+		t.Errorf("JSON: absent MinAccountSequence should be null, got %d", *absentParsed.MinAccountSequence)
+	}
+	if explicitParsed.MinAccountSequence == nil || *explicitParsed.MinAccountSequence != 0 {
+		t.Errorf("JSON: explicit-zero MinAccountSequence should be 0, got %v", explicitParsed.MinAccountSequence)
+	}
+	t.Logf("JSON correctly distinguishes absent (null) from explicit zero (0)")
+
+	// Now convert both to Parquet and check for information loss
+	absentParquet := absentOutput.ToParquet().(TransactionOutputParquet)
+	explicitParquet := explicitOutput.ToParquet().(TransactionOutputParquet)
+
+	// The bug: both become 0 in Parquet, losing the null/zero distinction
+	if absentParquet.MinAccountSequence == explicitParquet.MinAccountSequence {
+		t.Errorf("MinAccountSequence: Parquet collapsed absent (null) to %d, same as explicit zero %d — information lost",
+			absentParquet.MinAccountSequence, explicitParquet.MinAccountSequence)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestTransactionMinAccountSequenceNullCollapseInParquet
+    data_integrity_poc_test.go:148: JSON correctly distinguishes absent (null) from explicit zero (0)
+    data_integrity_poc_test.go:156: MinAccountSequence: Parquet collapsed absent (null) to 0, same as explicit zero 0 — information lost
+--- FAIL: TestTransactionMinAccountSequenceNullCollapseInParquet (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.665s
+FAIL
+```
