@@ -71,3 +71,121 @@ The bug affects four entity types in Parquet output: accounts, account signers, 
 - **Setup**: Construct an `AccountOutput` (or any of the four affected types) with `Sponsor: null.String{}` (zero value, i.e. Valid=false)
 - **Steps**: Call `.ToParquet()` on the constructed output, type-assert the result to `AccountOutputParquet`
 - **Assertion**: Assert that the returned struct's `Sponsor` field equals `""` — this demonstrates the null collapse. For the fix, assert that using a `*string` field with `repetitiontype=OPTIONAL`, the field is `nil` when the sponsor is null.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestSponsorNullCollapsesToEmptyStringInParquet"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs outputs for all four affected types (AccountOutput, AccountSignerOutput, TrustlineOutput, OfferOutput) with a null sponsor (`null.String{}` where `Valid=false`). It first verifies the precondition that `null.String{}` marshals to JSON `null`, then calls `.ToParquet()` on each type and confirms the resulting `Sponsor` field is `""` — an empty string instead of null. This proves that the Parquet conversion path loses the null semantic for unsponsored entries across all four entity types.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"encoding/json"
+	"testing"
+
+	"github.com/guregu/null"
+)
+
+// TestSponsorNullCollapsesToEmptyStringInParquet demonstrates that unsponsored
+// entries (Sponsor with Valid=false) produce "" in Parquet output instead of null.
+// This affects AccountOutput, AccountSignerOutput, TrustlineOutput, and OfferOutput.
+func TestSponsorNullCollapsesToEmptyStringInParquet(t *testing.T) {
+	// Construct outputs with null sponsors (Valid=false, the zero value)
+	nullSponsor := null.String{} // Valid=false, String=""
+
+	// Verify precondition: null.String zero value marshals to JSON null
+	jsonBytes, err := json.Marshal(nullSponsor)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+	if string(jsonBytes) != "null" {
+		t.Fatalf("Precondition failed: null.String zero value should marshal to JSON null, got %s", string(jsonBytes))
+	}
+
+	t.Run("AccountOutput", func(t *testing.T) {
+		ao := AccountOutput{Sponsor: nullSponsor}
+		parquet := ao.ToParquet().(AccountOutputParquet)
+		// Bug: null sponsor collapses to empty string instead of remaining null
+		if parquet.Sponsor != "" {
+			t.Errorf("Expected empty string (bug), got %q", parquet.Sponsor)
+		}
+		// The field is a plain string, not *string, so it cannot represent null
+		t.Logf("AccountOutput: null sponsor → Parquet sponsor=%q (should be null but is empty string)", parquet.Sponsor)
+	})
+
+	t.Run("AccountSignerOutput", func(t *testing.T) {
+		aso := AccountSignerOutput{Sponsor: nullSponsor}
+		parquet := aso.ToParquet().(AccountSignerOutputParquet)
+		if parquet.Sponsor != "" {
+			t.Errorf("Expected empty string (bug), got %q", parquet.Sponsor)
+		}
+		t.Logf("AccountSignerOutput: null sponsor → Parquet sponsor=%q (should be null but is empty string)", parquet.Sponsor)
+	})
+
+	t.Run("TrustlineOutput", func(t *testing.T) {
+		to := TrustlineOutput{Sponsor: nullSponsor}
+		parquet := to.ToParquet().(TrustlineOutputParquet)
+		if parquet.Sponsor != "" {
+			t.Errorf("Expected empty string (bug), got %q", parquet.Sponsor)
+		}
+		t.Logf("TrustlineOutput: null sponsor → Parquet sponsor=%q (should be null but is empty string)", parquet.Sponsor)
+	})
+
+	t.Run("OfferOutput", func(t *testing.T) {
+		oo := OfferOutput{Sponsor: nullSponsor}
+		parquet := oo.ToParquet().(OfferOutputParquet)
+		if parquet.Sponsor != "" {
+			t.Errorf("Expected empty string (bug), got %q", parquet.Sponsor)
+		}
+		t.Logf("OfferOutput: null sponsor → Parquet sponsor=%q (should be null but is empty string)", parquet.Sponsor)
+	})
+
+	// Also demonstrate that a valid (non-null) sponsor is preserved correctly
+	t.Run("ValidSponsorPreserved", func(t *testing.T) {
+		validSponsor := null.StringFrom("GABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
+		ao := AccountOutput{Sponsor: validSponsor}
+		parquet := ao.ToParquet().(AccountOutputParquet)
+		if parquet.Sponsor != "GABCDEFGHIJKLMNOPQRSTUVWXYZ234567" {
+			t.Errorf("Valid sponsor not preserved: got %q", parquet.Sponsor)
+		}
+		t.Logf("Valid sponsor preserved correctly: %q", parquet.Sponsor)
+	})
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestSponsorNullCollapsesToEmptyStringInParquet
+=== RUN   TestSponsorNullCollapsesToEmptyStringInParquet/AccountOutput
+    data_integrity_poc_test.go:34: AccountOutput: null sponsor → Parquet sponsor="" (should be null but is empty string)
+=== RUN   TestSponsorNullCollapsesToEmptyStringInParquet/AccountSignerOutput
+    data_integrity_poc_test.go:43: AccountSignerOutput: null sponsor → Parquet sponsor="" (should be null but is empty string)
+=== RUN   TestSponsorNullCollapsesToEmptyStringInParquet/TrustlineOutput
+    data_integrity_poc_test.go:52: TrustlineOutput: null sponsor → Parquet sponsor="" (should be null but is empty string)
+=== RUN   TestSponsorNullCollapsesToEmptyStringInParquet/OfferOutput
+    data_integrity_poc_test.go:61: OfferOutput: null sponsor → Parquet sponsor="" (should be null but is empty string)
+=== RUN   TestSponsorNullCollapsesToEmptyStringInParquet/ValidSponsorPreserved
+    data_integrity_poc_test.go:72: Valid sponsor preserved correctly: "GABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+--- PASS: TestSponsorNullCollapsesToEmptyStringInParquet (0.00s)
+    --- PASS: TestSponsorNullCollapsesToEmptyStringInParquet/AccountOutput (0.00s)
+    --- PASS: TestSponsorNullCollapsesToEmptyStringInParquet/AccountSignerOutput (0.00s)
+    --- PASS: TestSponsorNullCollapsesToEmptyStringInParquet/TrustlineOutput (0.00s)
+    --- PASS: TestSponsorNullCollapsesToEmptyStringInParquet/OfferOutput (0.00s)
+    --- PASS: TestSponsorNullCollapsesToEmptyStringInParquet/ValidSponsorPreserved (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.863s
+```

@@ -9,12 +9,12 @@
   "final_review_not_viable": 24,
   "final_review_revisions": 8,
   "condensations": 9,
-  "publishes": 100,
+  "publishes": 101,
   "agent_failures": 41,
   "agent_timeouts": 0,
-  "total_spawned": 761,
+  "total_spawned": 762,
   "input_tokens": 0,
-  "output_tokens": 8534045,
+  "output_tokens": 8537825,
   "cache_read_tokens": 0,
   "per_subsystem": {
     "data-integrity": {
@@ -129,7 +129,7 @@
     },
     "publish": {
       "input": 0,
-      "output": 444260,
+      "output": 448040,
       "cache_read": 0
     },
     "condensation": {
@@ -151,16 +151,11 @@
     },
     "claude-sonnet-4-6": {
       "input": 0,
-      "output": 534860,
+      "output": 538640,
       "cache_read": 0
     }
   },
   "agent_durations": [
-    [
-      "reviewer",
-      "claude-opus-4-6",
-      141.1
-    ],
     [
       "reviewer",
       "claude-opus-4-6",
@@ -1155,6 +1150,11 @@
       "final_review",
       "gpt-5.4",
       164.5
+    ],
+    [
+      "publish",
+      "claude-sonnet-4-6",
+      99.7
     ]
   ],
   "costs": {
@@ -1170,10 +1170,10 @@
           },
           "claude-sonnet-4-6": {
             "input_tokens": 0,
-            "output_tokens": 534860,
+            "output_tokens": 538640,
             "cache_read_tokens": 0,
-            "total_cost": 3.27,
-            "premium_requests": 109
+            "total_cost": 3.3,
+            "premium_requests": 110
           },
           "gpt-5.4": {
             "input_tokens": 0,
@@ -1183,10 +1183,10 @@
             "premium_requests": 223
           }
         },
-        "provider_cost": 48.39
+        "provider_cost": 48.42
       }
     },
-    "total_cost": 48.39,
+    "total_cost": 48.42,
     "stages": {
       "hypothesis": {
         "copilot": {
@@ -1219,8 +1219,8 @@
       "publish": {
         "copilot": {
           "input_tokens": 0,
-          "output_tokens": 444260,
-          "premium_requests": 100
+          "output_tokens": 448040,
+          "premium_requests": 101
         }
       },
       "condensation": {
