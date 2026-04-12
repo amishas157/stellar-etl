@@ -49,37 +49,39 @@ Some zero values are valid in-domain for rows where the field is present, such a
 
 ### Trace Summary
 
-Traced the complete path from `TransformTrade()` through the conditional field population in `trade.go:80-114`, through `TradeOutput` schema definition using `null.Int/String/Bool` in `schema.go:303-311`, into the Parquet conversion at `parquet_converter.go:248-274` where `.Int64`, `.String`, and `.Bool` are accessed without checking `.Valid`. Confirmed that `guregu/null` types wrap `sql.NullInt64/NullString/NullBool` where the raw value field is Go zero when `.Valid` is false. The `xitongsys/parquet-go` library supports `repetitiontype=OPTIONAL` for nullable columns, but no trade Parquet fields use it.
+Traced the complete path from `TransformTrade()` in `trade.go` through the `TradeOutput` JSON schema in `schema.go`, the `TradeOutputParquet` Parquet schema in `schema_parquet.go`, and the `ToParquet()` converter in `parquet_converter.go`. Confirmed that six nullable fields (`SellingOfferID`, `BuyingOfferID`, `SellingLiquidityPoolID`, `LiquidityPoolFee`, `RoundingSlippage`, `SellerIsExact`) are modeled as `null.Int`/`null.String`/`null.Bool` in the JSON schema but as plain `int64`/`string`/`bool` in the Parquet schema. The converter extracts `.Int64`, `.String`, and `.Bool` directly from the null wrappers, yielding zero values (`0`, `""`, `false`) when `Valid == false`. The `guregu/null` library embeds `sql.NullInt64`/`sql.NullBool` whose zero-value inner fields are `0`/`false`.
 
 ### Code Paths Examined
 
-- `internal/transform/trade.go:80-114` — LP trades set `liquidityPoolID`, `outputPoolFee`, `roundingSlippageBips` but leave `outputSellingOfferID` as zero-value `null.Int`; offer trades set `outputSellingOfferID` but leave LP fields as zero-value nulls
-- `internal/transform/trade.go:164-259` — `extractClaimedOffers` only sets `sellerIsExact` for `PathPaymentStrictSend` (false) and `PathPaymentStrictReceive` (true); for `ManageBuyOffer`, `ManageSellOffer`, `CreatePassiveSellOffer` it stays as zero-value `null.Bool{}`
-- `internal/transform/schema.go:303-311` — `SellingOfferID null.Int`, `BuyingOfferID null.Int`, `SellingLiquidityPoolID null.String`, `LiquidityPoolFee null.Int`, `RoundingSlippage null.Int`, `SellerIsExact null.Bool`
-- `internal/transform/schema_parquet.go:236-243` — Same fields as plain `int64`, `string`, `bool` — no OPTIONAL repetition type
-- `internal/transform/parquet_converter.go:266-273` — `to.SellingOfferID.Int64`, `to.SellingLiquidityPoolID.String`, `to.LiquidityPoolFee.Int64`, `to.RoundingSlippage.Int64`, `to.SellerIsExact.Bool` — accesses raw value fields, ignoring `.Valid`
-- `guregu/null@v4.0.0/int.go` — `null.Int` wraps `sql.NullInt64{Int64: 0, Valid: false}`; accessing `.Int64` yields `0` regardless of `.Valid`
+- `internal/transform/trade.go:80-114` — LP branch sets `liquidityPoolID`, `outputPoolFee`, `roundingSlippageBips` via `null.IntFrom()`/`null.StringFrom()`; offer branch sets `outputSellingOfferID` via `null.IntFrom()`. Unset fields remain as zero-value `null.X{}` (Valid=false).
+- `internal/transform/trade.go:164-253` — `extractClaimedOffers()` sets `sellerIsExact` only for PathPaymentStrictSend (false) and PathPaymentStrictReceive (true); for ManageBuyOffer/ManageSellOffer/CreatePassiveSellOffer it stays as zero-value `null.Bool{}`.
+- `internal/transform/schema.go:303-311` — `TradeOutput` declares `SellingOfferID null.Int`, `SellingLiquidityPoolID null.String`, `LiquidityPoolFee null.Int`, `RoundingSlippage null.Int`, `SellerIsExact null.Bool`.
+- `internal/transform/schema_parquet.go:236-243` — `TradeOutputParquet` declares the same fields as plain `int64`, `string`, `int64`, `int64`, `bool`.
+- `internal/transform/parquet_converter.go:248-274` — `ToParquet()` extracts `.Int64`, `.String`, `.Bool` directly, collapsing null to zero values.
+- `github.com/guregu/null@v4.0.0/bool.go:14-16` and `int.go:15-17` — Confirmed `null.Bool` wraps `sql.NullBool{Bool: false, Valid: false}` and `null.Int` wraps `sql.NullInt64{Int64: 0, Valid: false}`.
 
 ### Findings
 
-1. **Six fields affected**: `SellingOfferID`, `BuyingOfferID`, `SellingLiquidityPoolID`, `LiquidityPoolFee`, `RoundingSlippage`, `SellerIsExact` all collapse null→zero in Parquet. (`BuyingOfferID` is always set via lines 116-120, so it's not practically affected.)
+**Six fields lose null semantics in Parquet output:**
 
-2. **`SellerIsExact` is the worst case**: For manage-offer operations (`ManageBuyOffer`, `ManageSellOffer`, `CreatePassiveSellOffer`), `sellerIsExact` is never assigned and stays `null.Bool{}`. In JSON this is omitted (null). In Parquet it becomes `false`, which is **indistinguishable** from `PathPaymentStrictSend` trades where `SellerIsExact` is genuinely `false`. A downstream consumer cannot tell whether `seller_is_exact = false` means "this is a strict-send path payment" or "this field does not apply."
+| Field | JSON (offer trade) | Parquet (offer trade) | JSON (LP trade) | Parquet (LP trade) |
+|-------|--------------------|-----------------------|-----------------|--------------------|
+| `selling_offer_id` | present (valid ID) | valid ID | null (absent) | `0` |
+| `selling_liquidity_pool_id` | null (absent) | `""` | present (pool hex) | pool hex |
+| `liquidity_pool_fee` | null (absent) | `0` | present (e.g. 30) | 30 |
+| `rounding_slippage` | null (absent) | `0` | present (incl. valid 0) | value (incl. valid 0) |
+| `seller_is_exact` | null (absent) for manage ops | `false` | null or valid | value or `false` |
+| `buying_offer_id` | always set | always set | always set | always set |
 
-3. **`TradeType` partially mitigates but doesn't eliminate the issue**: `TradeType` (1=offer, 2=LP) is always populated and can disambiguate offer vs LP routing. However, `SellerIsExact` cuts across both categories (it distinguishes strict-send vs strict-receive path payments, both of which can produce either offer or LP trades), so `TradeType` alone cannot disambiguate the `SellerIsExact` null-collapse.
+**Most impactful collision — `seller_is_exact`:** ManageBuyOffer and ManageSellOffer trades get `seller_is_exact = false` in Parquet (collapsed from null), which is indistinguishable from PathPaymentStrictSend's legitimate `false`. The `trade_type` field (1=offer, 2=LP) does NOT disambiguate here because all three operation types produce trade_type=1 offer trades.
 
-4. **Not covered by prior investigation 010**: The prior transaction-precondition null-collapse (fail/data-integrity/010) was rejected because null and 0 are semantically equivalent for age/gap constraints. Here, null and zero/false are NOT equivalent — null means "field does not apply to this trade type" while zero/false carries specific meaning.
+**`rounding_slippage` ambiguity:** LP trades with genuine `rounding_slippage = 0` are indistinguishable from offer trades where the field should be absent. Downstream queries like "find LP trades with zero rounding slippage" would incorrectly include all offer trades.
+
+While `trade_type` partially mitigates some cases (you can filter by trade_type to know LP fields are irrelevant for type=1), it cannot distinguish null from zero within the same trade type, and `seller_is_exact` crosses trade types within type=1.
 
 ### PoC Guidance
 
-- **Test file**: `internal/transform/trade_test.go`
-- **Setup**: Create two `ingest.LedgerTransaction` objects: one with a `ManageSellOffer` operation that produces an offer-book trade (ClaimAtomTypeClaimAtomTypeOrderBook), and one with a path payment that produces an LP trade (ClaimAtomTypeClaimAtomTypeLiquidityPool). Use existing test helpers in `internal/utils/` for mock transaction construction.
-- **Steps**:
-  1. Call `TransformTrade()` for the offer-book transaction
-  2. Call `.ToParquet()` on the resulting `TradeOutput`
-  3. Assert that the Parquet `SellingLiquidityPoolID` is `""` and `LiquidityPoolFee` is `0` — demonstrating that null collapsed to zero values
-  4. Call `TransformTrade()` for the LP transaction
-  5. Call `.ToParquet()` on the resulting `TradeOutput`
-  6. Assert that `SellingOfferID` is `0` — demonstrating null collapsed
-  7. For a `ManageSellOffer` trade, verify that the JSON `SellerIsExact` is null (`.Valid == false`) but the Parquet value is `false` — identical to a genuine `PathPaymentStrictSend` trade's `SellerIsExact`
-- **Assertion**: The core assertion is that `TradeOutput` fields with `.Valid == false` produce non-null zero values in the Parquet output, proving information loss. The strongest sub-assertion is that a ManageSellOffer trade and a PathPaymentStrictSend trade produce identical `seller_is_exact = false` in Parquet despite having different JSON representations (null vs false).
+- **Test file**: `internal/transform/trade_test.go` (append new test case)
+- **Setup**: Create two `TradeOutput` values — one for an offer-book trade (LP fields null) and one for an LP trade (selling_offer_id null, seller_is_exact null). Call `ToParquet()` on both.
+- **Steps**: (1) Construct a `TradeOutput` with `SellingLiquidityPoolID: null.String{}` (not set) and `SellingOfferID: null.IntFrom(12345)`. Call `ToParquet()`. (2) Construct a `TradeOutput` with `SellingLiquidityPoolID: null.StringFrom("abc")` and `SellingOfferID: null.Int{}` (not set). Call `ToParquet()`. (3) Construct a `TradeOutput` with `SellerIsExact: null.Bool{}` (ManageBuyOffer — should be absent). Call `ToParquet()`.
+- **Assertion**: Assert that the offer-trade Parquet has `SellingLiquidityPoolID == ""` and `LiquidityPoolFee == 0` (demonstrating collapse). Assert that the LP-trade Parquet has `SellingOfferID == 0` (demonstrating collapse). Assert that the ManageBuyOffer Parquet has `SellerIsExact == false` — same as PathPaymentStrictSend's `null.BoolFrom(false)` after conversion, proving semantic collision.
