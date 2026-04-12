@@ -68,3 +68,109 @@ The bug is a straightforward omission: when `TrustlineOutputParquet` was defined
 - **Setup**: Create a `TrustlineOutput` with a non-empty `LiquidityPoolIDStrkey` value (e.g., from the existing pool-share test fixture in `trustline_test.go:150-166`)
 - **Steps**: Call `.ToParquet()` on the `TrustlineOutput` and inspect the returned `TrustlineOutputParquet` struct
 - **Assertion**: Assert that the `TrustlineOutputParquet` struct has a `LiquidityPoolIDStrkey` field containing the same value — this will fail with the current code because the field doesn't exist on the Parquet struct. The fix requires adding `LiquidityPoolIDStrkey string` with appropriate parquet tags to `TrustlineOutputParquet` and copying it in `ToParquet()`.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestTrustlineParquetDropsLiquidityPoolIDStrkey"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs a pool-share `TrustlineOutput` with `LiquidityPoolIDStrkey` set to the canonical `L...` StrKey value, confirms JSON serialization preserves the field, then calls `ToParquet()` and uses reflection to check if `TrustlineOutputParquet` has a `LiquidityPoolIDStrkey` field. It does not — the field is entirely absent from the Parquet schema struct, proving that every pool-share trustline silently loses this identifier in Parquet output.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"encoding/json"
+	"reflect"
+	"testing"
+	"time"
+)
+
+// TestTrustlineParquetDropsLiquidityPoolIDStrkey demonstrates that pool-share
+// trustlines lose the LiquidityPoolIDStrkey field when converted to Parquet.
+// The JSON path preserves it; the Parquet path silently drops it.
+func TestTrustlineParquetDropsLiquidityPoolIDStrkey(t *testing.T) {
+	// 1. Construct a pool-share TrustlineOutput with LiquidityPoolIDStrkey set
+	//    (values taken from the existing pool-share test fixture)
+	trustline := TrustlineOutput{
+		LedgerKey:             "AAAAAQAAAAAcR0GXGO76pFs4y38vJVAanjnLg4emNun7zAx0pHcDGAAAAAMBAwQFBwkAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+		AccountID:             "GBVVRXLMFNTO7MQEZ2R5Q5FRPNBEIVZ6FWDKBYV4PFMYGORCGGRAFMN",
+		AssetType:             "pool_share",
+		AssetID:               -1967220342708457407,
+		Balance:               0.5,
+		TrustlineLimit:        1111111111111111111,
+		LiquidityPoolID:       "0103040507090000000000000000000000000000000000000000000000000000",
+		Flags:                 1,
+		BuyingLiabilities:     0.0015,
+		SellingLiabilities:    0.0005,
+		LastModifiedLedger:    123456789,
+		LedgerEntryChange:     1,
+		Deleted:               false,
+		LedgerSequence:        10,
+		ClosedAt:              time.Date(1970, time.January, 1, 0, 16, 40, 0, time.UTC),
+		LiquidityPoolIDStrkey: "LAAQGBAFA4EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2VM",
+	}
+
+	// 2. Verify JSON path preserves the field
+	jsonBytes, err := json.Marshal(trustline)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+
+	var jsonMap map[string]interface{}
+	if err := json.Unmarshal(jsonBytes, &jsonMap); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v", err)
+	}
+
+	jsonVal, jsonHasField := jsonMap["liquidity_pool_id_strkey"]
+	if !jsonHasField {
+		t.Fatal("JSON output missing liquidity_pool_id_strkey — test setup error")
+	}
+	if jsonVal != "LAAQGBAFA4EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2VM" {
+		t.Fatalf("JSON liquidity_pool_id_strkey has wrong value: %v", jsonVal)
+	}
+	t.Logf("JSON path preserves liquidity_pool_id_strkey = %v", jsonVal)
+
+	// 3. Convert to Parquet and check for the field via reflection
+	parquetResult := trustline.ToParquet()
+	parquetType := reflect.TypeOf(parquetResult)
+
+	_, parquetHasField := parquetType.FieldByName("LiquidityPoolIDStrkey")
+
+	if !parquetHasField {
+		// BUG CONFIRMED: the field is present in JSON but missing from Parquet
+		t.Errorf("BUG: TrustlineOutputParquet struct has no LiquidityPoolIDStrkey field — "+
+			"pool-share trustlines lose the canonical L... StrKey identifier in Parquet output. "+
+			"JSON has the field (%v) but Parquet schema drops it entirely.", jsonVal)
+	} else {
+		// If the field exists, verify the value is actually copied
+		parquetValue := reflect.ValueOf(parquetResult)
+		strkey := parquetValue.FieldByName("LiquidityPoolIDStrkey").String()
+		if strkey != trustline.LiquidityPoolIDStrkey {
+			t.Errorf("BUG: LiquidityPoolIDStrkey not copied to Parquet: got %q, want %q",
+				strkey, trustline.LiquidityPoolIDStrkey)
+		}
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestTrustlineParquetDropsLiquidityPoolIDStrkey
+    data_integrity_poc_test.go:53: JSON path preserves liquidity_pool_id_strkey = LAAQGBAFA4EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2VM
+    data_integrity_poc_test.go:63: BUG: TrustlineOutputParquet struct has no LiquidityPoolIDStrkey field — pool-share trustlines lose the canonical L... StrKey identifier in Parquet output. JSON has the field (LAAQGBAFA4EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2VM) but Parquet schema drops it entirely.
+--- FAIL: TestTrustlineParquetDropsLiquidityPoolIDStrkey (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.782s
+```
