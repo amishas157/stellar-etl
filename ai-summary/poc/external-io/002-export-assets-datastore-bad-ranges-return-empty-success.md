@@ -79,3 +79,131 @@ The asymmetry between the two code paths is notable: `GetPaymentOperationsHistor
   2. Call `GetPaymentOperations(100, 0, -1, env, false)` (end == 0) and verify same
   3. Contrast with `ValidateLedgerRange(100, 50, 1000)` returning an error
 - **Assertion**: `GetPaymentOperations` returns `([]AssetTransformInput{}, nil)` for impossible ranges instead of returning an error, confirming the export command would produce an empty success artifact
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: cmd/data_integrity_poc_test.go
+**Test Name**: "TestExportAssetsAcceptsImpossibleDatastoreRanges"
+**Test Language**: Go
+
+### Demonstration
+
+The test proves that `export_assets` silently accepts impossible bounded ranges (`end < start` and `end == 0`) on the default datastore path, producing empty output files with exit code 0. In contrast, the existing `ValidateLedgerRange()` helper correctly rejects both cases with descriptive errors. This confirms the missing validation gap: `GetPaymentOperations` never calls `ValidateLedgerRange`, allowing impossible ranges to produce success-shaped empty artifacts.
+
+### Test Body
+
+```go
+package cmd
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stellar/stellar-etl/v2/internal/utils"
+)
+
+func runAssetExportPoC(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+
+	cmd := exec.Command("./stellar-etl", args...)
+	output, err := cmd.CombinedOutput()
+	return string(output), err
+}
+
+// TestExportAssetsAcceptsImpossibleDatastoreRanges demonstrates that the
+// datastore-backed export_assets command silently accepts impossible bounded
+// ranges (end < start, end == 0) and emits empty success-shaped output
+// instead of rejecting them. The existing ValidateLedgerRange helper would
+// catch these ranges, but GetPaymentOperations never calls it.
+func TestExportAssetsAcceptsImpossibleDatastoreRanges(t *testing.T) {
+	t.Run("ValidateLedgerRange rejects impossible ranges", func(t *testing.T) {
+		t.Run("end before start", func(t *testing.T) {
+			err := utils.ValidateLedgerRange(100, 50, 1000)
+			if err == nil {
+				t.Fatal("expected ValidateLedgerRange to reject end < start")
+			}
+			if !strings.Contains(err.Error(), "end sequence number is less than start") {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+		})
+
+		t.Run("end is zero", func(t *testing.T) {
+			err := utils.ValidateLedgerRange(2, 0, 1000)
+			if err == nil {
+				t.Fatal("expected ValidateLedgerRange to reject end == 0")
+			}
+			if !strings.Contains(err.Error(), "end sequence number equal to 0") {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+		})
+	})
+
+	cases := []struct {
+		name          string
+		args          []string
+		wantValidator string
+	}{
+		{
+			name:          "export_assets accepts end before start",
+			args:          []string{"export_assets", "-s", "100", "-e", "50"},
+			wantValidator: "end sequence number is less than start",
+		},
+		{
+			name:          "export_assets accepts end is zero",
+			args:          []string{"export_assets", "-s", "100", "-e", "0"},
+			wantValidator: "end sequence number equal to 0",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			outputPath := filepath.Join(t.TempDir(), "out.json")
+			args := append(tc.args, "-o", outputPath)
+
+			output, err := runAssetExportPoC(t, args...)
+			if err != nil {
+				t.Fatalf("command failed unexpectedly; invalid ranges may now be rejected: %v\nOutput: %s", err, output)
+			}
+
+			if strings.Contains(output, tc.wantValidator) {
+				t.Fatalf("command reported validation error instead of silently succeeding: %s", output)
+			}
+
+			info, statErr := os.Stat(outputPath)
+			if statErr != nil {
+				t.Fatalf("expected output file to be created: %v", statErr)
+			}
+			if info.Size() != 0 {
+				t.Fatalf("expected empty output file, got %d bytes", info.Size())
+			}
+		})
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestExportAssetsAcceptsImpossibleDatastoreRanges
+=== RUN   TestExportAssetsAcceptsImpossibleDatastoreRanges/ValidateLedgerRange_rejects_impossible_ranges
+=== RUN   TestExportAssetsAcceptsImpossibleDatastoreRanges/ValidateLedgerRange_rejects_impossible_ranges/end_before_start
+=== RUN   TestExportAssetsAcceptsImpossibleDatastoreRanges/ValidateLedgerRange_rejects_impossible_ranges/end_is_zero
+=== RUN   TestExportAssetsAcceptsImpossibleDatastoreRanges/export_assets_accepts_end_before_start
+=== RUN   TestExportAssetsAcceptsImpossibleDatastoreRanges/export_assets_accepts_end_is_zero
+--- PASS: TestExportAssetsAcceptsImpossibleDatastoreRanges (2.52s)
+    --- PASS: TestExportAssetsAcceptsImpossibleDatastoreRanges/ValidateLedgerRange_rejects_impossible_ranges (0.00s)
+        --- PASS: TestExportAssetsAcceptsImpossibleDatastoreRanges/ValidateLedgerRange_rejects_impossible_ranges/end_before_start (0.00s)
+        --- PASS: TestExportAssetsAcceptsImpossibleDatastoreRanges/ValidateLedgerRange_rejects_impossible_ranges/end_is_zero (0.00s)
+    --- PASS: TestExportAssetsAcceptsImpossibleDatastoreRanges/export_assets_accepts_end_before_start (1.62s)
+    --- PASS: TestExportAssetsAcceptsImpossibleDatastoreRanges/export_assets_accepts_end_is_zero (0.89s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/cmd	13.998s
+```
