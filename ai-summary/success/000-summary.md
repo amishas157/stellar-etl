@@ -100,6 +100,7 @@
 - `external-io/013-trade-parquet-null-collapse.md` — High — trade Parquet export collapses nullable routing fields into zero values, including unrecoverable `seller_is_exact` collisions within offer trades
 - `external-io/014-sponsor-null-collapses-to-empty-string.md` — High — ledger-entry Parquet export rewrites null `sponsor` values to empty strings
 - `external-io/016-transaction-family-exports-return-empty-success-on-bad-ranges.md` — High — six transaction-family export commands accept impossible bounded ranges and return empty success-shaped output
+- `external-io/017-export-assets-zero-limit-emits-first-ledger-assets.md` — Medium — `export_assets --limit 0` still scans the first in-range ledger and can emit non-empty asset rows
 - `export-pipeline/019-config-parallel-compute-exports-empty-shell.md` — High — config-setting export drops `ledger_max_dependent_tx_clusters` from `CONFIG_SETTING_CONTRACT_PARALLEL_COMPUTE_V0`
 - `cli-commands/013-muxed-sac-transfer-effects-become-contract-effects.md` — High — muxed SAC transfer participants are exported as contract effects and attributed to the operation source account
 - `data-integrity/017-json-export-write-errors-are-silently-dropped.md` — Medium — `ExportEntry` logs failed JSON writes but returns `nil`, so exporters count dropped rows as successful
