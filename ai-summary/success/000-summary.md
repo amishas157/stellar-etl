@@ -73,6 +73,7 @@
 - `cli-commands/012-write-parquet-ignores-finalization-errors.md` — Medium — `WriteParquet` ignores `WriteStop()` and `Close()` failures, so callers can keep or upload truncated parquet artifacts
 - `data-transform/020-create-contract-address-preimage-drops-salt.md` — High — address-based create-contract exports drop the contract preimage salt from operation details
 - `data-integrity/020-failed-path-payment-amount-fields-flip-json-types.md` — High — failed `path_payment_strict_receive` / `path_payment_strict_send` rows flip amount-field JSON types between string and number
+- `data-integrity/021-path-payment-strict-send-amount-type-flip.md` — High — failed `path_payment_strict_send` rows serialize `details.amount` as a JSON string while successful rows emit a JSON number
 - `data-transform/021-normalized-offer-buy-side-base-counter-amounts-swapped.md` — Critical — normalized-offer export swaps `base_amount` and `counter_amount` for buy-side rows
 - `data-transform/022-normalized-offer-sell-side-counter-amount-double-rounds-float-product.md` — Critical — normalized-offer sell-side `counter_amount` multiplies by a pre-rounded price float and exports the wrong numeric value
 - `export-pipeline/017-ledger-transaction-parquet-request-silently-ignored.md` — Medium — `export_ledger_transaction --write-parquet` exits successfully, writes JSON, and silently skips the requested parquet artifact
