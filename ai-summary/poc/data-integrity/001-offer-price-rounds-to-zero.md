@@ -80,3 +80,88 @@ The bug is confirmed with a concrete, reproducible trigger:
 - **Setup**: Create a mock `ManageSellOffer` operation with `xdr.Price{N: 1, D: 2147483647}` using the existing test utilities (`utils.CreateSampleTx` or direct `xdr.Operation` construction)
 - **Steps**: Call `TransformOperation()` on the mock operation and extract `details["price"]` and `details["price_r"]` from the result
 - **Assertion**: Assert that `details["price"].(float64) == 0.0` (demonstrating the bug) while `details["price_r"].(Price).Numerator == 1` and `details["price_r"].(Price).Denominator == 2147483647` (demonstrating the inconsistency). The fix would compute `float64(price.N) / float64(price.D)` directly instead of routing through `price.String()`.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestOfferPriceRoundsToZero"
+**Test Language**: Go
+
+### Demonstration
+
+The test calls `addPriceDetails()` — the production function at `operation.go:409-421` — with `xdr.Price{N: 1, D: 2147483647}` (a valid on-chain price ≈ 4.66e-10). The function routes through `price.String()` which uses `FloatString(7)`, truncating the value to `"0.0000000"`, then `strconv.ParseFloat` converts it to `0.0`. The test confirms that `result["price"]` is `0.0` while `result["price_r"]` correctly preserves `{1, 2147483647}`, proving the semantic inconsistency in exported data.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestOfferPriceRoundsToZero demonstrates that addPriceDetails() collapses
+// tiny but valid on-chain prices to numeric zero. The xdr.Price.String()
+// upstream formatter uses FloatString(7) (7 decimal digits), so any price
+// with N/D < 5e-8 rounds to "0.0000000" before ParseFloat, producing 0.0.
+// Meanwhile price_r correctly preserves the exact rational {N, D}.
+//
+// If this test PASSES, the bug is confirmed (POC_PASS).
+func TestOfferPriceRoundsToZero(t *testing.T) {
+	// A valid on-chain price: 1/2147483647 ≈ 4.66e-10
+	tinyPrice := xdr.Price{N: 1, D: 2147483647}
+
+	result := make(map[string]interface{})
+	err := addPriceDetails(result, tinyPrice, "")
+	if err != nil {
+		t.Fatalf("addPriceDetails returned unexpected error: %v", err)
+	}
+
+	// Extract the exported numeric price
+	priceVal, ok := result["price"].(float64)
+	if !ok {
+		t.Fatalf("result[\"price\"] is not float64: %T", result["price"])
+	}
+
+	// Extract the rational price
+	priceR, ok := result["price_r"].(Price)
+	if !ok {
+		t.Fatalf("result[\"price_r\"] is not Price: %T", result["price_r"])
+	}
+
+	// The rational price_r correctly preserves the exact numerator and denominator
+	if priceR.Numerator != 1 || priceR.Denominator != 2147483647 {
+		t.Errorf("price_r should preserve the rational: got {%d, %d}, want {1, 2147483647}",
+			priceR.Numerator, priceR.Denominator)
+	}
+
+	// BUG ASSERTION: The numeric price is zero even though the true value is ~4.66e-10.
+	correctPrice := float64(1) / float64(2147483647)
+	if priceVal != 0.0 {
+		t.Errorf("expected price to be 0.0 (demonstrating the bug), got %e", priceVal)
+	}
+
+	// Log the inconsistency for clarity
+	t.Logf("BUG DEMONSTRATED: addPriceDetails exported price=%v but price_r={%d, %d} (true value ≈ %e)",
+		priceVal, priceR.Numerator, priceR.Denominator, correctPrice)
+	t.Logf("The price field and price_r field are semantically contradictory in the same row")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestOfferPriceRoundsToZero
+    data_integrity_poc_test.go:51: BUG DEMONSTRATED: addPriceDetails exported price=0 but price_r={1, 2147483647} (true value ≈ 4.656613e-10)
+    data_integrity_poc_test.go:53: The price field and price_r field are semantically contradictory in the same row
+--- PASS: TestOfferPriceRoundsToZero (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.970s
+```
