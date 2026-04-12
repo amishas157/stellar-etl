@@ -31,3 +31,31 @@ The transform branch for `create_claimable_balance` never touches the transactio
 ## Anti-Evidence
 
 The checked-in test fixture for `CreateClaimableBalanceResult` does not populate `BalanceId`, so the repository may be intentionally mirroring an older or Horizon-style operation schema that omits it. If final review treats this as a schema-extension request instead of a wrong-value bug, it may be rejected despite the result field being available in modern XDR.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-12
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: PASS — not previously investigated
+**Failed At**: reviewer
+
+### Trace Summary
+
+Traced the `create_claimable_balance` case in both `extractOperationDetails` functions (lines 881–885 and 1537–1549) in `internal/transform/operation.go`. Both extract only request-body fields (`asset`, `amount`, `claimants`) and do not read the operation result's `BalanceId`. Then traced the upstream Horizon `operations_processor.go` (lines 537–549 in `go@v0.0.0-20250729094549`), which implements the identical behavior — Horizon also only extracts `asset`, `amount`, and `claimants` for `create_claimable_balance` and does not include the result `BalanceId`.
+
+### Code Paths Examined
+
+- `internal/transform/operation.go:881-885` — `create_claimable_balance` branch extracts only `asset`, `amount`, `claimants` from operation body
+- `internal/transform/operation.go:1537-1549` — second variant (Horizon-mirroring path) does exactly the same extraction
+- `go@v0.0.0-20250729094549/services/horizon/internal/ingest/processors/operations_processor.go:537-549` — upstream Horizon code also omits `balance_id` from `create_claimable_balance` details
+
+### Why It Failed
+
+This is **working-as-designed behavior**, not a data correctness bug. The stellar-etl code faithfully mirrors the upstream Horizon operation detail schema, which intentionally extracts only the request payload for `create_claimable_balance` operations. The Horizon API has maintained this schema since the operation type was introduced. The omission of `balance_id` from the create operation is a deliberate schema design choice, not an oversight. Adding it would be a schema extension/feature request, not a bug fix.
+
+### Lesson Learned
+
+When evaluating missing fields in operation details, always check the upstream Horizon `operations_processor.go` to determine whether the omission is intentional schema design. The stellar-etl operation transform is designed to mirror Horizon's output schema, so "missing" fields that Horizon also omits are by-design, not bugs.

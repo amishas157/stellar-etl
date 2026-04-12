@@ -113,6 +113,7 @@
 - `export-pipeline/021-ledger-entry-batches-leak-file-descriptors.md` — Medium — `export_ledger_entry_changes` leaks two JSON file descriptors per new batch/resource output and can stop later exports at the OS FD limit
 - `data-integrity/018-trustline-asset-id-hashes-raw-enum.md` — High — `trust_lines.asset_id` hashes the raw XDR enum name instead of the exported canonical asset type, so identical assets get different IDs across tables
 - `data-transform/027-path-payment-operation-details-round-large-amounts.md` — Critical — path-payment `history_operations.details` amounts round distinct large stroop values together
+- `external-io/021-effect-address-muxed-null-collapse.md` — High — effect Parquet export rewrites missing `address_muxed` to empty strings
 - `data-transform/028-offer-detail-amount-rounding.md` — Critical — offer-family `history_operations.details.amount` rounds distinct large order sizes together
 - `external-io/015-ledger-exports-accept-impossible-datastore-ranges.md` — Medium — `export_ledgers` and `export_token_transfer` accept impossible bounded ranges and emit empty success-shaped files
 - `data-transform/029-liquidity-pool-bound-rounding.md` — Critical — liquidity-pool `history_operations.details` request bounds round distinct large reserve limits together
