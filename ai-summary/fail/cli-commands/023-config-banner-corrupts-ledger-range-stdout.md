@@ -45,7 +45,7 @@ The default behavior of `get_ledger_range_from_times` is to write to `exported_r
 
 ### Trace Summary
 
-Traced the Cobra initialization path: `cobra.OnInitialize(initConfig)` (root.go:38) registers `initConfig` to run before any command's `Run` function. When a config file exists and `viper.ReadInConfig()` succeeds, `initConfig` prints `"Using config file: ..."` to stdout via `fmt.Println` (root.go:73). Then `get_ledger_range_from_times`'s `Run` function executes, and when `path == ""` (line 74), it prints the JSON result to stdout via `fmt.Println` (line 80). Both writes target `os.Stdout`, producing a two-line output where the first line is non-JSON banner text.
+Traced the Cobra initialization path: `cobra.OnInitialize(initConfig)` (root.go:38) registers `initConfig` to run before any command's `Run` function. When a config file exists and `viper.ReadInConfig()` succeeds, `initConfig` prints `"Using config file: ..."` to stdout via `fmt.Println` (root.go:73). Then `get_ledger_range_from_times`'s `Run` function executes, and when `path == ""` (line 74), `fmt.Println(string(marshalled))` writes JSON to stdout (line 80). Both writes target `os.Stdout`, producing a two-line output where the first line is non-JSON banner text.
 
 ### Code Paths Examined
 
@@ -213,3 +213,32 @@ func TestConfigBannerCorruptsLedgerRangeStdout(t *testing.T) {
 PASS
 ok  	github.com/stellar/stellar-etl/v2/cmd	1.725s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-12
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Does the PoC actually exercise the claimed issue?** Yes. I replaced the simulated PoC with a stricter reproduction that builds the real `stellar-etl` binary, runs `stellar-etl --config <tempfile> get_ledger_range_from_times -s 2019-02-06T09:14:43+00:00 -e 2019-02-06T09:20:23+00:00 -o ""`, and captures stdout. The command prints a config banner first and then a valid JSON ledger range, so the mixed stdout behavior is real.
+2. **Are the preconditions realistic?** Partially. The trigger requires two non-default choices: a readable config file and an explicit empty `-o ""` to force the undocumented stdout branch. That is plausible for shell automation, but narrower than ordinary use because the documented default path writes to `exported_range.txt`.
+3. **Is the behavior a bug or by design?** This is a real CLI output bug, likely inherited from Cobra/Viper scaffolding, not an intended machine-readable interface. But the fact that it is a bug does not make it an in-scope data-integrity finding.
+4. **Does the impact match the claimed severity?** No. Final severity is **Informational**, not Medium. The ledger-range JSON values themselves remain correct; the extra banner text makes stdout obviously invalid JSON and causes consumers to fail immediately. This is not silent corruption of plausible data.
+5. **Is the finding in scope?** No. The stated objective is silent data corruption that downstream systems can consume without error. Here, downstream JSON parsers fail closed on the first byte of the banner. That is a CLI UX/integration failure, not a data-integrity issue under this review objective.
+6. **Is the test itself correct?** Yes. The final reproduction uses the built production binary and the actual Cobra command path, not mocked internals, and it verifies both that the complete stdout stream is invalid JSON and that the JSON line itself is valid.
+7. **Can the results be explained without the claimed issue?** No alternative explanation is needed for the mixed stdout behavior itself; it follows directly from two `fmt.Println` calls targeting stdout. The impact, however, is fully explained as a loud parse failure rather than wrong exported data.
+8. **Is this finding novel?** Likely novel as phrased, but novelty does not change the scope outcome.
+
+### Rejection Reason
+
+The PoC confirms a real stdout-mixing bug, but it does **not** demonstrate silent or plausible data corruption. The command emits an obviously invalid mixed stream that causes JSON consumers to error out, while the actual ledger-range payload remains correct. That makes this an out-of-scope CLI integration defect for the current data-integrity objective.
+
+### Failed Checks
+
+- 4
+- 5
