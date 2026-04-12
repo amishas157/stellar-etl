@@ -103,6 +103,7 @@
 - `external-io/017-export-assets-zero-limit-emits-first-ledger-assets.md` — Medium — `export_assets --limit 0` still scans the first in-range ledger and can emit non-empty asset rows
 - `export-pipeline/019-config-parallel-compute-exports-empty-shell.md` — High — config-setting export drops `ledger_max_dependent_tx_clusters` from `CONFIG_SETTING_CONTRACT_PARALLEL_COMPUTE_V0`
 - `cli-commands/013-muxed-sac-transfer-effects-become-contract-effects.md` — High — muxed SAC transfer participants are exported as contract effects and attributed to the operation source account
+- `cli-commands/014-json-exporters-ignore-close-failures.md` — Medium — one-shot JSON export commands ignore writable file `Close()` errors and still report success before optional upload
 - `external-io/020-trustline-parquet-drops-liquidity-pool-strkey.md` — High — trustline Parquet export drops populated `liquidity_pool_id_strkey` for pool-share trustlines
 - `data-transform/034-muxed-sac-burn-sender-becomes-contract-effect.md` — High — muxed SAC burn senders are exported as contract effects and attributed to the operation source account
 - `data-transform/030-contract-event-parquet-schema-invalid.md` — Medium — `export_contract_events --write-parquet` cannot initialize its Parquet writer because `ContractEventOutputParquet` uses invalid repeated-field schema tags
