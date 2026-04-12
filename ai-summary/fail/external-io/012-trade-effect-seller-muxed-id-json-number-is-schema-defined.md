@@ -211,3 +211,34 @@ func TestSellerMuxedIdJsonNumber(t *testing.T) {
 PASS
 ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.961s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-12
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Exercises claimed issue**: PARTIAL — the PoC reproduces that `seller_muxed_id` is emitted as a JSON number, but it calls `addAccountAndMuxedAccountDetails()` directly and then proves loss only after a separate generic `float64` decode. It does not show the ETL itself emitting an incorrect value.
+2. **Realistic preconditions**: YES — muxed IDs are user-chosen `uint64` values, so `> 2^53` is plausible.
+3. **Bug vs by-design**: BY DESIGN — the repository's published output schema explicitly defines `TradeEffectDetails.SellerMuxedID` as `uint64` with `json:"seller_muxed_id,omitempty"` in `internal/transform/schema.go`, not a quoted string, and existing effect tests assert `seller_muxed_id` as `uint64` in `internal/transform/effects_test.go`.
+4. **Impact vs severity**: OVERSTATED — the emitted JSON text preserves the exact decimal digits. Any precision loss occurs only in downstream consumers that choose an imprecise number decoder, so this is not ETL-side structural corruption.
+5. **In scope**: NO — the objective requires a concrete code path producing wrong ETL output. Here the exporter emits the exact numeric value defined by its own schema; the claim depends on comparing this project to Horizon's separate JSON contract.
+6. **Test correctness**: INSUFFICIENT FOR CONFIRMATION — the test proves an interoperability hazard for some consumers, not that `export_effects` violates this repository's contract or corrupts the field. The codebase intentionally publishes schemas from `internal/transform/schema.go` via the README.
+7. **Alternative explanation**: YES — the straightforward explanation is that stellar-etl intentionally models muxed IDs as numeric JSON fields and expects consumers needing lossless decoding to honor 64-bit integers or use the companion `seller_muxed` string field.
+8. **Novelty**: PASS
+
+### Rejection Reason
+
+The PoC demonstrates a downstream JSON-interoperability risk, not a data-integrity bug in stellar-etl itself. The exporter emits the exact value mandated by this repository's own published schema and reinforced by existing tests, so the claimed "wrong output" is by design rather than corruption.
+
+### Failed Checks
+
+- 3
+- 5
+- 6
+- 7

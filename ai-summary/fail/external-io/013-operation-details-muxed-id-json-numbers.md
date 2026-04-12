@@ -34,3 +34,32 @@ The helper writes `result[prefix+"muxed_id"] = muxedAccountId` directly into the
 ## Anti-Evidence
 
 The paired `*_muxed` address field is also exported, so a downstream system that reparses `M...` addresses can recover the ID indirectly. Some JSON stacks also preserve large integers without rounding. But this operation `details` path is still a live outlier against Horizon's documented JSON shape and against other stellar-etl surfaces such as token transfers that already stringify muxed IDs.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-12
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of H003 (fail/external-io/012-trade-effect-seller-muxed-id-json-number-is-schema-defined.md)
+**Failed At**: reviewer
+
+### Trace Summary
+
+Traced `addAccountAndMuxedAccountDetails` at operation.go:423-440. Confirmed `GetId()` returns `uint64` and line 437 stores it raw into `map[string]interface{}`. This is the identical root cause function and mechanism as H003 (seller_muxed_id in trade effects), which targeted the same function at the same line. H003 went through full review (VIABLE), PoC (PASS), and was ultimately REJECTED at final review because the ETL emits exact decimal digits and precision loss is a downstream consumer issue, not ETL-side corruption.
+
+### Code Paths Examined
+
+- `internal/transform/operation.go:addAccountAndMuxedAccountDetails:423-440` — identical root cause as H003; `GetId()` returns `uint64`, stored raw at line 437
+- `internal/transform/operation.go:extractOperationDetails:596-669` — multiple call sites for payment/path-payment operations, all through the same helper
+- `cmd/command_utils.go:ExportEntry:55-86` — `UseNumber()` decoder preserves digits in Go, but final JSON output is still bare number
+- `internal/transform/schema.go:676` — `TokenTransferOutput.ToMuxedID` is `null.String`, showing the codebase is inconsistent, but this was already evaluated in H003
+
+### Why It Failed
+
+This hypothesis targets the same root cause function (`addAccountAndMuxedAccountDetails:437`), the same mechanism (raw `uint64` in `map[string]interface{}` → bare JSON number), and the same precision concern as H003 (fail/external-io/012). H003 was fully investigated through PoC and rejected at final review because: (1) the ETL emits exact decimal digits — the JSON text `9007199254740993` is correct, (2) precision loss occurs only in downstream consumers that choose float64-based JSON decoders, (3) this is a JSON interoperability concern, not ETL-side data corruption, and (4) comparing to Horizon's `json:",string"` tags is comparing two separate projects' contracts. These rejection reasons apply identically to the operation details path — it's a different call site of the same function with the same output behavior.
+
+### Lesson Learned
+
+When a root-cause function has already been investigated and rejected, hypotheses targeting different call sites of the same function with the same mechanism are duplicates. The operation details path through `addAccountAndMuxedAccountDetails` is not meaningfully distinct from the trade effects path — both store `uint64` in a `map[string]interface{}` and produce identical JSON output behavior.
