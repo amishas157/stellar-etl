@@ -117,3 +117,4 @@
 - `external-io/018-export-assets-accepts-impossible-datastore-ranges.md` — High — default datastore-backed `export_assets` accepts impossible bounded ranges and emits empty success-shaped output
 - `data-transform/031-extend-restore-footprint-exports-first-footprint-contract.md` — High — `extend_footprint_ttl` and `restore_footprint` export the first matching footprint contract as authoritative metadata
 - `data-integrity/019-open-ended-ledger-bounds-serialize-as-zero-upper-bound.md` — High — transaction export serializes open-ended `ledger_bounds` as `[min,0)` instead of preserving the missing upper bound
+- `data-transform/032-muxed-sac-mint-recipient-becomes-contract-effect.md` — High — muxed SAC mint recipients are exported as contract effects on the operation source account
