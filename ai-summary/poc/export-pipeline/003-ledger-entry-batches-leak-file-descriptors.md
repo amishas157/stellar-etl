@@ -72,3 +72,131 @@ Short runs may never accumulate enough open files to hit the OS limit, and proce
 - **Setup**: Call `exportTransformedData()` in a loop with dummy `transformedOutput` containing a single resource type, using a temporary directory for `folderPath`. Before the loop, record the process FD count via `/proc/self/fd` (Linux) or `lsof -p` (macOS).
 - **Steps**: Run `exportTransformedData()` N times (e.g., 100) with distinct batch start/end values so each call creates a new file. After all iterations, count open FDs again.
 - **Assertion**: Assert that the FD count after the loop exceeds the initial count by at least N (proving descriptors accumulate). For a stronger assertion, set `ulimit -n` to a low value (e.g., 128) and verify that the loop fatals before completing all iterations.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: cmd/data_integrity_poc_test.go
+**Test Name**: "TestExportTransformedDataLeaksFileDescriptors"
+**Test Language**: Go
+
+### Demonstration
+
+The test calls `exportTransformedData()` 50 times with distinct batch ranges and a single resource type, counting open file descriptors before and after the loop. It observed 100 leaked FDs (2 per call: one from `createOutputFile()`'s discarded `os.Create()` and one from the unclosed `outFile` returned by `MustOutFile()`). This confirms that FDs accumulate linearly with batch count and are never released, proving the hypothesis that long-running exports will exhaust the OS file descriptor limit.
+
+### Test Body
+
+```go
+package cmd
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+
+	"github.com/stellar/stellar-etl/v2/internal/transform"
+)
+
+// countOpenFDs returns the number of open file descriptors for this process.
+// On macOS /dev/fd is a virtual directory listing the current process's FDs.
+// On Linux /proc/self/fd serves the same purpose.
+func countOpenFDs(t *testing.T) int {
+	t.Helper()
+	var fdDir string
+	switch runtime.GOOS {
+	case "darwin":
+		fdDir = "/dev/fd"
+	case "linux":
+		fdDir = "/proc/self/fd"
+	default:
+		t.Skipf("unsupported OS for FD counting: %s", runtime.GOOS)
+	}
+
+	dir, err := os.Open(fdDir)
+	if err != nil {
+		t.Fatalf("cannot open %s: %v", fdDir, err)
+	}
+	// Use Readdirnames to avoid lstat calls on volatile /dev/fd entries
+	names, err := dir.Readdirnames(-1)
+	dir.Close()
+	if err != nil {
+		t.Fatalf("cannot read %s: %v", fdDir, err)
+	}
+	return len(names)
+}
+
+// TestExportTransformedDataLeaksFileDescriptors demonstrates that
+// exportTransformedData() never closes the outFile it opens via MustOutFile(),
+// causing file descriptor leaks that accumulate over repeated calls.
+// Each call also leaks an extra FD from createOutputFile()'s discarded os.Create().
+func TestExportTransformedDataLeaksFileDescriptors(t *testing.T) {
+	tmpDir := t.TempDir()
+	folderPath := filepath.Join(tmpDir, "json")
+	parquetFolderPath := filepath.Join(tmpDir, "parquet")
+
+	// Build minimal transformedOutput with one resource type and one entry.
+	// Using TtlOutput since it's a small struct.
+	dummyEntry := transform.TtlOutput{
+		KeyHash:            "abc123",
+		LiveUntilLedgerSeq: 100,
+		LastModifiedLedger: 50,
+	}
+	transformedOutput := map[string][]interface{}{
+		"ttl": {dummyEntry},
+	}
+
+	const iterations = 50
+
+	// Record baseline FD count before the loop.
+	fdBefore := countOpenFDs(t)
+	t.Logf("FDs before loop: %d", fdBefore)
+
+	for i := 0; i < iterations; i++ {
+		start := uint32(i * 64)
+		end := start + 63
+		err := exportTransformedData(
+			start, end,
+			folderPath,
+			parquetFolderPath,
+			transformedOutput,
+			"", "", "", // no cloud upload
+			nil,   // no extra fields
+			false, // no parquet
+		)
+		if err != nil {
+			t.Fatalf("exportTransformedData iteration %d failed: %v", i, err)
+		}
+	}
+
+	fdAfter := countOpenFDs(t)
+	t.Logf("FDs after %d iterations: %d", iterations, fdAfter)
+
+	leaked := fdAfter - fdBefore
+	t.Logf("Leaked FDs: %d (expected at least %d)", leaked, iterations)
+
+	// Each iteration should leak at least 1 FD (the outFile that is never closed).
+	// In practice it leaks 2 per iteration (createOutputFile's os.Create + MustOutFile's os.OpenFile).
+	// We assert conservatively: at least 1 leaked FD per iteration.
+	if leaked < iterations {
+		t.Errorf("Expected at least %d leaked FDs, but only found %d. "+
+			"The FD leak may have been fixed.", iterations, leaked)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestExportTransformedDataLeaksFileDescriptors
+    data_integrity_poc_test.go:64: FDs before loop: 6
+    data_integrity_poc_test.go:84: FDs after 50 iterations: 106
+    data_integrity_poc_test.go:87: Leaked FDs: 100 (expected at least 50)
+--- PASS: TestExportTransformedDataLeaksFileDescriptors (0.01s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/cmd	5.612s
+```
