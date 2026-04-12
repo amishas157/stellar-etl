@@ -38,3 +38,34 @@ The current behavior is not hypothetical; the unit test explicitly expects a nat
 ## Anti-Evidence
 
 The codebase may ultimately treat `history_assets` as an operation-derived asset-reference table rather than authoritative asset creation history, in which case including native would be a deliberate semantic choice. But the current command and reader documentation repeatedly use "created" / "new assets" / "issue an asset" language, so emitting lumens still looks like a meaningful contract mismatch rather than a harmless formatting choice.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE
+**Date**: 2026-04-12
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: PASS — not previously investigated
+**Failed At**: reviewer
+
+### Trace Summary
+
+Traced the complete path from `export_assets` command through `GetPaymentOperations()` → `TransformAsset()` → `transformSingleAsset()`. The code unconditionally processes all assets from payment and manage_sell_offer operations, including native XLM. The unit test at `asset_test.go:74-122` explicitly constructs a native payment input and asserts that a native asset row (`AssetType: "native"`, empty code/issuer) appears in the output. The `seenIDs` dedup map in `export_assets.go:40-58` treats native the same as any other asset. No guard against native exists anywhere in the pipeline because none was intended.
+
+### Code Paths Examined
+
+- `internal/transform/asset.go:14-53` — `TransformAsset()` accepts payment ops and extracts `PaymentOp.Asset` with no native filter
+- `internal/transform/asset.go:55-70` — `transformSingleAsset()` calls `asset.Extract()` which handles native as `asset_type="native"` with empty code/issuer
+- `internal/transform/asset_test.go:74-97` — Test input explicitly includes a native XLM payment operation
+- `internal/transform/asset_test.go:104-122` — Expected output explicitly asserts native asset row is emitted
+- `cmd/export_assets.go:40-58` — `seenIDs` dedup treats native identically to issued assets; no special-casing
+- `internal/input/assets.go:20-61` — Reader collects all payment/manage_sell_offer ops without asset-type filtering
+
+### Why It Failed
+
+**Working-as-designed behavior.** The unit test was deliberately written to verify that native XLM payments produce native asset rows in the output. The `transformSingleAsset` helper intentionally handles native assets without any guard or warning. Previous fail investigations in this subsystem (009, 017) and meta-pattern 6 from the fail summary all confirm that `export_assets` is an intentional asset-reference export over payment operations — not a "newly created asset" registry. The "created" language in the README and comments is imprecise documentation, but the actual implementation is tested and intentional. A documentation wording issue is not a data correctness bug.
+
+### Lesson Learned
+
+When a unit test explicitly constructs a specific input scenario and asserts the corresponding output, that behavior is intentional by definition. Documentation using imprecise language ("created") does not override explicit test assertions. Documentation wording mismatches are style/clarity issues, not data correctness bugs within the scope of this investigation.
