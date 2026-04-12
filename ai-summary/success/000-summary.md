@@ -103,3 +103,4 @@
 - `cli-commands/013-muxed-sac-transfer-effects-become-contract-effects.md` — High — muxed SAC transfer participants are exported as contract effects and attributed to the operation source account
 - `data-integrity/017-json-export-write-errors-are-silently-dropped.md` — Medium — `ExportEntry` logs failed JSON writes but returns `nil`, so exporters count dropped rows as successful
 - `export-pipeline/020-float64-stroop-json-rounding.md` — Critical — `ConvertStroopValueToReal` rounds large monetary values to the wrong exported JSON number
+- `export-pipeline/021-ledger-entry-batches-leak-file-descriptors.md` — Medium — `export_ledger_entry_changes` leaks two JSON file descriptors per new batch/resource output and can stop later exports at the OS FD limit
