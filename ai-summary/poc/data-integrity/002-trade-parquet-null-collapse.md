@@ -85,3 +85,162 @@ While `trade_type` partially mitigates some cases (you can filter by trade_type 
 - **Setup**: Create two `TradeOutput` values — one for an offer-book trade (LP fields null) and one for an LP trade (selling_offer_id null, seller_is_exact null). Call `ToParquet()` on both.
 - **Steps**: (1) Construct a `TradeOutput` with `SellingLiquidityPoolID: null.String{}` (not set) and `SellingOfferID: null.IntFrom(12345)`. Call `ToParquet()`. (2) Construct a `TradeOutput` with `SellingLiquidityPoolID: null.StringFrom("abc")` and `SellingOfferID: null.Int{}` (not set). Call `ToParquet()`. (3) Construct a `TradeOutput` with `SellerIsExact: null.Bool{}` (ManageBuyOffer — should be absent). Call `ToParquet()`.
 - **Assertion**: Assert that the offer-trade Parquet has `SellingLiquidityPoolID == ""` and `LiquidityPoolFee == 0` (demonstrating collapse). Assert that the LP-trade Parquet has `SellingOfferID == 0` (demonstrating collapse). Assert that the ManageBuyOffer Parquet has `SellerIsExact == false` — same as PathPaymentStrictSend's `null.BoolFrom(false)` after conversion, proving semantic collision.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-12
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestTradeParquetNullCollapse"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs four trade scenarios: (1) an offer-book trade with null LP fields, (2) an LP trade with null selling_offer_id, (3) a ManageBuyOffer vs PathPaymentStrictSend `seller_is_exact` collision, and (4) an LP trade with `rounding_slippage=0` vs an offer trade with absent slippage. In all cases, `ToParquet()` collapses null wrappers to zero values, making semantically distinct records indistinguishable in Parquet output.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+
+	"github.com/guregu/null"
+)
+
+// TestTradeParquetNullCollapse demonstrates that TradeOutput.ToParquet() collapses
+// null.Int/null.String/null.Bool fields to zero values, making it impossible to
+// distinguish "field absent" from "field present with zero/false/empty" in Parquet.
+func TestTradeParquetNullCollapse(t *testing.T) {
+	// === Case 1: Offer-book trade — LP fields should be absent ===
+	offerTrade := TradeOutput{
+		SellingOfferID:         null.IntFrom(12345),
+		BuyingOfferID:          null.IntFrom(67890),
+		SellingLiquidityPoolID: null.String{}, // absent — not an LP trade
+		LiquidityPoolFee:       null.Int{},    // absent
+		RoundingSlippage:       null.Int{},    // absent
+		SellerIsExact:          null.Bool{},   // absent — ManageSellOffer has no exact semantics
+		TradeType:              1,             // offer trade
+	}
+
+	offerParquet := offerTrade.ToParquet().(TradeOutputParquet)
+
+	// These fields are absent in JSON (Valid=false), but Parquet collapses them to zero values
+	if offerParquet.SellingLiquidityPoolID != "" {
+		t.Errorf("Expected SellingLiquidityPoolID to collapse to empty string, got %q", offerParquet.SellingLiquidityPoolID)
+	}
+	if offerParquet.LiquidityPoolFee != 0 {
+		t.Errorf("Expected LiquidityPoolFee to collapse to 0, got %d", offerParquet.LiquidityPoolFee)
+	}
+	if offerParquet.RoundingSlippage != 0 {
+		t.Errorf("Expected RoundingSlippage to collapse to 0, got %d", offerParquet.RoundingSlippage)
+	}
+	if offerParquet.SellerIsExact != false {
+		t.Errorf("Expected SellerIsExact to collapse to false, got %v", offerParquet.SellerIsExact)
+	}
+
+	t.Log("CONFIRMED: Offer-book trade LP fields collapsed to zero values in Parquet")
+
+	// === Case 2: LP trade — SellingOfferID should be absent ===
+	lpTrade := TradeOutput{
+		SellingOfferID:         null.Int{},                       // absent — not an offer trade
+		BuyingOfferID:          null.IntFrom(99999),
+		SellingLiquidityPoolID: null.StringFrom("abc123poolhex"), // present
+		LiquidityPoolFee:       null.IntFrom(30),                // present
+		RoundingSlippage:       null.IntFrom(5),                 // present
+		SellerIsExact:          null.Bool{},                      // absent for LP trades
+		TradeType:              2,                                // LP trade
+	}
+
+	lpParquet := lpTrade.ToParquet().(TradeOutputParquet)
+
+	// SellingOfferID is absent (null) but Parquet shows 0
+	if lpParquet.SellingOfferID != 0 {
+		t.Errorf("Expected SellingOfferID to collapse to 0, got %d", lpParquet.SellingOfferID)
+	}
+
+	t.Log("CONFIRMED: LP trade SellingOfferID collapsed to 0 in Parquet")
+
+	// === Case 3: Semantic collision — ManageBuyOffer vs PathPaymentStrictSend ===
+	// ManageBuyOffer: SellerIsExact is absent (null)
+	manageBuyTrade := TradeOutput{
+		SellingOfferID: null.IntFrom(11111),
+		BuyingOfferID:  null.IntFrom(22222),
+		SellerIsExact:  null.Bool{}, // absent — not applicable for ManageBuyOffer
+		TradeType:      1,
+	}
+
+	// PathPaymentStrictSend: SellerIsExact is explicitly false
+	strictSendTrade := TradeOutput{
+		SellingOfferID: null.IntFrom(33333),
+		BuyingOfferID:  null.IntFrom(44444),
+		SellerIsExact:  null.BoolFrom(false), // explicitly false — valid value
+		TradeType:      1,
+	}
+
+	manageBuyParquet := manageBuyTrade.ToParquet().(TradeOutputParquet)
+	strictSendParquet := strictSendTrade.ToParquet().(TradeOutputParquet)
+
+	// Both produce SellerIsExact=false in Parquet, but they mean different things:
+	// - ManageBuyOffer: field should be absent (null)
+	// - PathPaymentStrictSend: field is explicitly false
+	if manageBuyParquet.SellerIsExact != strictSendParquet.SellerIsExact {
+		t.Errorf("Expected semantic collision but values differ: manage=%v strict_send=%v",
+			manageBuyParquet.SellerIsExact, strictSendParquet.SellerIsExact)
+	}
+
+	// Verify the source data IS distinguishable (Valid flag differs)
+	if manageBuyTrade.SellerIsExact.Valid == strictSendTrade.SellerIsExact.Valid {
+		t.Errorf("Expected source null.Bool Valid flags to differ, both are %v", manageBuyTrade.SellerIsExact.Valid)
+	}
+
+	t.Log("CONFIRMED: ManageBuyOffer (null) and PathPaymentStrictSend (false) both produce SellerIsExact=false in Parquet — semantic collision")
+
+	// === Case 4: LP trade with rounding_slippage=0 vs offer trade (absent) ===
+	lpZeroSlippage := TradeOutput{
+		SellingLiquidityPoolID: null.StringFrom("pool789"),
+		LiquidityPoolFee:       null.IntFrom(30),
+		RoundingSlippage:       null.IntFrom(0), // legitimate zero
+		TradeType:              2,
+	}
+
+	offerNoSlippage := TradeOutput{
+		SellingOfferID:   null.IntFrom(55555),
+		RoundingSlippage: null.Int{}, // absent
+		TradeType:        1,
+	}
+
+	lpZeroParquet := lpZeroSlippage.ToParquet().(TradeOutputParquet)
+	offerNoParquet := offerNoSlippage.ToParquet().(TradeOutputParquet)
+
+	// Both produce RoundingSlippage=0 in Parquet
+	if lpZeroParquet.RoundingSlippage != offerNoParquet.RoundingSlippage {
+		t.Errorf("Expected RoundingSlippage collision but values differ: lp=%d offer=%d",
+			lpZeroParquet.RoundingSlippage, offerNoParquet.RoundingSlippage)
+	}
+
+	// Verify source data IS distinguishable
+	if lpZeroSlippage.RoundingSlippage.Valid == offerNoSlippage.RoundingSlippage.Valid {
+		t.Errorf("Expected source Valid flags to differ, both are %v", lpZeroSlippage.RoundingSlippage.Valid)
+	}
+
+	t.Log("CONFIRMED: LP trade (rounding_slippage=0) and offer trade (absent) both produce RoundingSlippage=0 in Parquet — semantic collision")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestTradeParquetNullCollapse
+    data_integrity_poc_test.go:40: CONFIRMED: Offer-book trade LP fields collapsed to zero values in Parquet
+    data_integrity_poc_test.go:60: CONFIRMED: LP trade SellingOfferID collapsed to 0 in Parquet
+    data_integrity_poc_test.go:95: CONFIRMED: ManageBuyOffer (null) and PathPaymentStrictSend (false) both produce SellerIsExact=false in Parquet — semantic collision
+    data_integrity_poc_test.go:125: CONFIRMED: LP trade (rounding_slippage=0) and offer trade (absent) both produce RoundingSlippage=0 in Parquet — semantic collision
+--- PASS: TestTradeParquetNullCollapse (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.792s
+```
