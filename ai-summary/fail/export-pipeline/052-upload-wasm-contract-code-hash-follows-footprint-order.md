@@ -279,3 +279,33 @@ func TestUploadWasmContractCodeHashFollowsFootprintOrder(t *testing.T) {
 FAIL
 FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.852s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-12
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Does the PoC exercise the claimed issue?** Yes. A temporary test appended to `internal/transform/data_integrity_poc_test.go` and run with `go test ./internal/transform/... -run TestUploadWasmContractCodeHashFollowsFootprintOrder -v` reproduced the helper's current behavior: given a handcrafted envelope, `TransformOperation()` returned the first `ReadOnly` `ContractCode` hash instead of `sha256(wasm)`.
+2. **Are the preconditions realistic?** No. Soroban transactions are prepared from simulation, should contain exactly one Soroban operation, and are expected to carry the exact accessed footprint. The PoC only works by manually injecting an unrelated `ContractCode` key into the same `upload_wasm` footprint, and the review did not establish that this footprint shape is valid for an archived on-chain upload.
+3. **Is the behavior a bug or by design?** Not established as a live bug. For valid `upload_wasm` transactions, the uploaded code's `ContractCode` key is expected in `ReadWrite`, so the footprint-based helper still resolves the production hash that export code sees.
+4. **Does the impact match the claimed severity?** Not reached. Without a valid trigger, there is no confirmed production data corruption to score.
+5. **Is the finding in scope?** No. The current demonstration is a transform mismatch on a manually mutated envelope, not a concrete export path for real ledger data.
+6. **Is the test itself correct?** Partially. It correctly isolates the transform helper's ordering behavior, but it does so with a transaction shape whose validity was not demonstrated.
+7. **Can the results be explained WITHOUT the claimed issue?** Yes. The failure is explained by feeding the transform an invalid or at least unproven footprint superset, rather than by showing that `history_operations` can actually export the wrong hash for a valid Soroban upload.
+8. **Is this finding novel?** Possibly, but novelty is irrelevant because reachability failed.
+
+### Rejection Reason
+
+The PoC demonstrates an order-dependent helper on a handcrafted transaction envelope, but it does not demonstrate a reachable on-chain `upload_wasm` transaction that can legally contain the competing `ContractCode` key required for the mismatch. Final review therefore rejects the finding as an invalid-input artifact rather than confirmed export corruption.
+
+### Failed Checks
+
+- 2
+- 5
+- 7
