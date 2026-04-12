@@ -94,3 +94,4 @@
 - `data-transform/024-create-contract-uses-first-footprint-contract.md` — High — `create_contract` exports the first footprint contract ID instead of the contract derived from `ContractIdPreimage`
 - `data-transform/025-invoke-contract-asset-balance-changes-ignore-operation-events.md` — High — `invoke_contract` exports empty `asset_balance_changes` when SAC contract events are not duplicated into diagnostics
 - `data-integrity/014-ledger-entry-changes-leaks-file-descriptors.md` — Medium — `export_ledger_entry_changes` leaves JSON writers open until GC and can stop later batches at the OS FD limit
+- `data-integrity/015-ledger-transaction-drops-post-apply-fee-changes.md` — High — `ledger_transaction` export drops protocol-23+ `PostTxApplyFeeChanges` from all raw blobs

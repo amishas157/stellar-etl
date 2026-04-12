@@ -40,23 +40,24 @@ This issue only manifests when ledgers actually contain the dedicated `EvictionI
 **Verdict**: NOT_VIABLE
 **Date**: 2026-04-11
 **Reviewed by**: claude-opus-4-6, high
-**Novelty**: FAIL — duplicate of `ai-summary/success/data-integrity/006-eviction-iterator-empty-shell.md.gh-published`
+**Novelty**: FAIL — duplicate of `data-integrity/006-eviction-iterator-empty-shell.md.gh-published`
 **Failed At**: reviewer
 
 ### Trace Summary
 
-The hypothesis describes the exact same bug as the already-confirmed and published finding `data-integrity/006-eviction-iterator-empty-shell.md.gh-published`. That finding covers the same root cause (`TransformConfigSetting()` never calling `GetEvictionIterator()`), the same missing schema columns (`bucket_list_level`, `is_curr_bucket`, `bucket_file_offset`), and the same impact (config_setting_id=13 rows export as metadata-only shells). Additionally, `ai-summary/fail/data-transform/summary.md` entry 024a already documented a previous duplicate of this same finding.
+This hypothesis describes the exact same bug already confirmed and published as `ai-summary/success/data-integrity/006-eviction-iterator-empty-shell.md.gh-published`. The same finding was also previously rejected as duplicate `024a.md` in `ai-summary/fail/data-transform/summary.md` and as entry `041.md` in `ai-summary/fail/export-pipeline/summary.md`. The root cause, affected code paths, missing fields, and impact are identical across all filings.
 
 ### Code Paths Examined
 
 - `internal/transform/config_setting.go:85-96` — confirmed `GetStateArchivalSettings()` is called but `GetEvictionIterator()` is not
-- `internal/transform/config_setting.go:116-178` — confirmed no eviction iterator fields in output struct construction
-- `ai-summary/success/data-integrity/006-eviction-iterator-empty-shell.md.gh-published` — exact same finding already confirmed and published
+- `ai-summary/success/data-integrity/006-eviction-iterator-empty-shell.md.gh-published` — confirmed published finding covers this exact issue
+- `ai-summary/fail/export-pipeline/summary.md:041` — confirmed this exact hypothesis was previously rejected as a cross-subsystem duplicate
+- `ai-summary/fail/data-transform/summary.md:024a` — confirmed another prior duplicate rejection
 
 ### Why It Failed
 
-This is a cross-subsystem duplicate. The identical finding was already discovered, confirmed via PoC, and published under the `data-integrity` subsystem as `006-eviction-iterator-empty-shell.md.gh-published`. A prior duplicate was also caught under `data-transform/024a.md`.
+This is a cross-subsystem duplicate of an already-confirmed and published finding (`data-integrity/006-eviction-iterator-empty-shell`). The same missing `GetEvictionIterator()` call, same missing schema columns (`bucket_list_level`, `is_curr_bucket`, `bucket_file_offset`), and same impact (metadata-only shell row for config_setting_id=13) have been thoroughly documented and published. This is the third time this exact finding has been filed under a different subsystem label.
 
 ### Lesson Learned
 
-Cross-subsystem duplicate checking is essential for config-setting hypotheses — the same `TransformConfigSetting()` code path can be filed under `export-pipeline`, `data-transform`, or `data-integrity` subsystems. Always check `ai-summary/success/` across all subsystems, not just the target subsystem.
+Always check `ai-summary/success/` across ALL subsystems before filing a hypothesis. The eviction-iterator empty-shell bug was originally confirmed under `data-integrity`, not `export-pipeline` or `data-transform`, demonstrating that cross-subsystem duplicate checking is essential.
