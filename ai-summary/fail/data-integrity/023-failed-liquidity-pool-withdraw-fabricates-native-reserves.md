@@ -174,3 +174,31 @@ func TestFailedLPWithdrawFabricatesNativeReserves(t *testing.T) {
 PASS
 ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.478s
 ```
+
+---
+
+## Final Review
+
+**Verdict**: REJECTED
+**Date**: 2026-04-12
+**Final review by**: gpt-5.4, high
+**Failed At**: final-review
+
+### Adversarial Analysis
+
+1. **Exercises claimed issue**: PASS — I tightened the reproduction independently by generating a real liquidity-pool ID with `xdr.NewPoolId(lpAssetA, lpAssetB, 30)` for a native/credit pool and reran `TestFailedLPWithdrawFabricatesNativeReserves`. The active production path in `TransformOperation()` still emits `reserve_b_asset_type="native"` and the native sentinel `asset_id` even though the pool ID encodes a credit reserve.
+2. **Realistic preconditions**: PASS — failed liquidity-pool withdraws are normal on-chain events, and the tightened reproduction used a canonical pool ID rather than an arbitrary byte array.
+3. **Bug vs by-design**: PASS — current Horizon ingest tests expect failed liquidity-pool details to omit unknown assets as empty strings, not serialize them as native assets. This strengthens the underlying bug claim rather than undermining it.
+4. **Impact/severity**: PASS — the corrupted fields are structural reserve-asset identifiers, so High is appropriate.
+5. **In scope**: PASS — this is a concrete `history_operations.details` corruption path in repository code.
+6. **Test correctness**: PASS — the strengthened reproduction passed for the right reason after proving the referenced pool ID belongs to a real non-native pair.
+7. **Alternative explanations**: PASS — the observed result is explained by zero-value `xdr.Asset{}` defaulting to `AssetTypeNative`.
+8. **Novelty**: FAIL — this exact issue is already published as `ai-summary/success/data-integrity/023-failed-liquidity-pool-ops-fabricate-native-reserves.md.gh-published`, including the same root cause, impact, and a stronger native/non-native pool-ID PoC covering withdraw.
+
+### Rejection Reason
+
+Exact duplicate of the already-published finding `data-integrity/023-failed-liquidity-pool-ops-fabricate-native-reserves`. The underlying behavior is real, but this hypothesis does not add a distinct bug, mechanism, or impact beyond the published deposit/withdraw write-up.
+
+### Failed Checks
+
+- 8
