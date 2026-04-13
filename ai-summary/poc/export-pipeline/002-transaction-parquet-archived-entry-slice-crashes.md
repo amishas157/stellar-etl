@@ -98,3 +98,110 @@ Both scenarios produce incorrect results. The `ExtraSigners []string` field work
 - **Setup**: Construct a `TransactionOutputParquet` with `SorobanResourcesArchivedEntries: []uint32{1, 2}` and all other fields at zero values. Create a local Parquet file writer and `NewParquetWriter` with the struct as schema.
 - **Steps**: Call `writer.Write(parquetStruct)` then `writer.WriteStop()`. Alternatively, construct a `[]interface{}` and call `marshal.Marshal()` directly with the schema handler.
 - **Assertion**: Assert that `writer.Write()` or `writer.WriteStop()` returns a non-nil error containing "reflect" or "Int on uint32". Confirm that the same struct with an empty `[]uint32{}` or `nil` slice does NOT error. The fix would be to either change the Go field to `[]int32` or add `convertedtype=UINT_32` to the parquet tag (though the latter may not resolve the reflect issue — changing the field type is the safer fix).
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-13
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestTransactionParquetArchivedEntryCrash"
+**Test Language**: Go
+
+### Demonstration
+
+The test creates a `TransactionOutputParquet` with `SorobanResourcesArchivedEntries: []uint32{1, 2}` and writes it to a Parquet file via `writer.Write()`. The write triggers `reflect: call of reflect.Value.Int on uint32 Value` because parquet-go's INT32 marshal path calls `reflect.Value.Int()` on unsigned integer kinds. The test also confirms that an empty `[]uint32{}` slice writes successfully, proving the bug is specific to non-empty uint32 data.
+
+### Test Body
+
+```go
+func TestTransactionParquetArchivedEntryCrash(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "poc-archived-*.parquet")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	pf, err := local.NewLocalFileWriter(tmpPath)
+	if err != nil {
+		t.Fatalf("failed to create parquet file writer: %v", err)
+	}
+	defer pf.Close()
+
+	pw, err := writer.NewParquetWriter(pf, new(TransactionOutputParquet), 1)
+	if err != nil {
+		t.Fatalf("failed to create parquet writer: %v", err)
+	}
+
+	// A record with a NON-EMPTY archived entries slice triggers the bug.
+	record := TransactionOutputParquet{
+		SorobanResourcesArchivedEntries: []uint32{1, 2},
+	}
+
+	writeErr := pw.Write(record)
+	stopErr := pw.WriteStop()
+
+	// At least one of Write or WriteStop must surface the error.
+	if writeErr == nil && stopErr == nil {
+		t.Fatal("expected an error from Write or WriteStop for non-empty []uint32 archived entries, but got nil")
+	}
+
+	combinedErr := ""
+	if writeErr != nil {
+		combinedErr += writeErr.Error()
+	}
+	if stopErr != nil {
+		combinedErr += stopErr.Error()
+	}
+	t.Logf("Bug confirmed: non-empty []uint32 archived entries causes error: %s", combinedErr)
+
+	// Verify that an EMPTY slice does NOT trigger the error — proving the
+	// issue is specific to non-empty uint32 slices, not the schema itself.
+	tmpFile2, err := os.CreateTemp("", "poc-empty-*.parquet")
+	if err != nil {
+		t.Fatalf("failed to create second temp file: %v", err)
+	}
+	tmpPath2 := tmpFile2.Name()
+	tmpFile2.Close()
+	defer os.Remove(tmpPath2)
+
+	pf2, err := local.NewLocalFileWriter(tmpPath2)
+	if err != nil {
+		t.Fatalf("failed to create second parquet file writer: %v", err)
+	}
+	defer pf2.Close()
+
+	pw2, err := writer.NewParquetWriter(pf2, new(TransactionOutputParquet), 1)
+	if err != nil {
+		t.Fatalf("failed to create second parquet writer: %v", err)
+	}
+
+	emptyRecord := TransactionOutputParquet{
+		SorobanResourcesArchivedEntries: []uint32{},
+	}
+
+	if err := pw2.Write(emptyRecord); err != nil {
+		t.Fatalf("empty slice should not error on Write, got: %v", err)
+	}
+	if err := pw2.WriteStop(); err != nil {
+		t.Fatalf("empty slice should not error on WriteStop, got: %v", err)
+	}
+
+	t.Log("Confirmed: empty []uint32 slice writes successfully, proving bug is triggered only by non-empty data")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestTransactionParquetArchivedEntryCrash
+    data_integrity_poc_test.go:347: Bug confirmed: non-empty []uint32 archived entries causes error: reflect: call of reflect.Value.Int on uint32 Value
+    data_integrity_poc_test.go:381: Confirmed: empty []uint32 slice writes successfully, proving bug is triggered only by non-empty data
+--- PASS: TestTransactionParquetArchivedEntryCrash (0.01s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.748s
+```
