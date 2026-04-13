@@ -94,3 +94,65 @@ The codebase itself has both correct patterns for slice fields, confirming these
 - **Setup**: Import `parquet-go/writer` and `parquet-go/source/local`. Create a temp file.
 - **Steps**: Call `writer.NewParquetWriter(tempFile, new(transform.LedgerOutputParquet), 1)`
 - **Assertion**: Assert that the returned error is non-nil and contains `"not a valid Type string"`. This directly demonstrates that the schema cannot initialize. Optionally, also show that after fixing the tags to use `type=MAP, convertedtype=LIST, valuetype=BYTE_ARRAY, valueconvertedtype=UTF8`, the writer initializes successfully.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-13
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestLedgerParquetEvictedKeyTagsBreakWriter"
+**Test Language**: Go
+
+### Demonstration
+
+The test creates a temporary file and attempts to initialize a parquet writer using `writer.NewParquetWriter` with the `LedgerOutputParquet` schema. The writer fails immediately with error `"failed to create schema from tag map: type : not a valid Type string"`, proving that `export_ledgers --write-parquet` cannot produce any output because the schema contains `[]string` fields (`EvictedLedgerKeysType`, `EvictedLedgerKeysHash`) with scalar `BYTE_ARRAY` tags instead of the LIST or REPEATED pattern required by parquet-go.
+
+### Test Body
+
+```go
+func TestLedgerParquetEvictedKeyTagsBreakWriter(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "ledger_parquet_poc_*.parquet")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	pf, err := local.NewLocalFileWriter(tmpPath)
+	if err != nil {
+		t.Fatalf("failed to create local file writer: %v", err)
+	}
+	defer pf.Close()
+
+	// Attempt to create a parquet writer with the LedgerOutputParquet schema.
+	// This should fail because the evicted key fields have invalid tags.
+	pw, err := writer.NewParquetWriter(pf, new(LedgerOutputParquet), 1)
+	if pw != nil {
+		pw.WriteStop()
+	}
+
+	if err == nil {
+		t.Fatal("expected NewParquetWriter to fail for LedgerOutputParquet, but it succeeded")
+	}
+
+	if !strings.Contains(err.Error(), "not a valid Type string") {
+		t.Errorf("unexpected error message: got %q, want substring %q", err.Error(), "not a valid Type string")
+	}
+
+	t.Logf("Confirmed: LedgerOutputParquet parquet writer fails with: %v", err)
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestLedgerParquetEvictedKeyTagsBreakWriter
+    data_integrity_poc_test.go:336: Confirmed: LedgerOutputParquet parquet writer fails with: failed to create schema from tag map: type : not a valid Type string
+--- PASS: TestLedgerParquetEvictedKeyTagsBreakWriter (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.904s
+```
