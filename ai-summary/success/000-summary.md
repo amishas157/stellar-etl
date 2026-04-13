@@ -130,6 +130,7 @@
 - `external-io/019-transaction-parquet-zeroes-absent-min-account-sequence.md` — High — transaction Parquet export encodes absent `min_account_sequence` as `0`, collapsing it with explicit `min_account_sequence=0`
 - `external-io/022-contract-code-parquet-drops-ledger-key-hash-base64.md` — High — contract-code Parquet export drops populated `ledger_key_hash_base_64` from every contract-code row
 - `external-io/023-assets-captive-core-panics-on-zero-ledger-close-meta.md` — Medium — `export_assets --captive-core` passes a zero `LedgerCloseMeta` into `TransformAsset` and panics before emitting any rows
+- `external-io/024-gcs-upload-leaks-source-file-descriptors.md` — Medium — `UploadTo()` leaves local upload readers open until GC and can exhaust file descriptors during repeated GCS uploads
 - `data-integrity/022-offer-operation-details-price-rounded-to-zero.md` — Critical — offer-operation `details.price` parses `xdr.Price.String()` and silently rounds tiny non-zero prices down to `0`
 - `data-integrity/023-failed-liquidity-pool-ops-fabricate-native-reserves.md` — High — failed liquidity-pool deposit/withdraw rows serialize unknown reserve assets as fabricated `native/native`
 - `export-pipeline/023-ledger-parquet-evicted-key-tags-break-writer.md` — Medium — `export_ledgers --write-parquet` cannot initialize its Parquet writer because ledger evicted-key slices use invalid Parquet tags
