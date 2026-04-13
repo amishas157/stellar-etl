@@ -35,3 +35,30 @@ The limit boundary is at the ledger-reader layer, not the emitted-row layer. `Ge
 ## Anti-Evidence
 
 Ledgers with zero or one token-transfer event will not visibly exceed a positive limit. The individual exported rows can still be internally correct; the bug is that the CLI silently violates the requested output bound.
+
+---
+
+## Review
+
+**Verdict**: NOT_VIABLE — duplicate of success/data-input/006-token-transfer-limit-counts-ledgers-instead-of-token-transfer-rows.md.gh-published
+**Date**: 2026-04-13
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: FAIL — duplicate of success/data-input/006-token-transfer-limit-counts-ledgers-instead-of-token-transfer-rows.md.gh-published
+**Failed At**: reviewer
+
+### Trace Summary
+
+This hypothesis describes the exact same bug already confirmed and published as `success/data-input/006-token-transfer-limit-counts-ledgers-instead-of-token-transfer-rows.md.gh-published`. That success file documents the same mechanism (`GetLedgers()` enforces limit on ledger count, `TransformTokenTransfer()` expands each ledger into multiple rows), the same trigger (`--limit 1` on a multi-event ledger), and includes real pubnet reproductions. Additionally, the identical hypothesis was previously filed under `cli-commands` and rejected in `fail/cli-commands/026-token-transfer-limit-counts-ledgers.md` as a duplicate of the same success entry.
+
+### Code Paths Examined
+
+- `cmd/export_token_transfers.go:28` — passes limit to `GetLedgers()` (confirmed, same as prior investigation)
+- `internal/input/ledgers.go:84-86` — limit enforced at ledger granularity (confirmed, same as prior investigation)
+
+### Why It Failed
+
+Exact duplicate of an already-confirmed finding. The token-transfer limit-counts-ledgers bug has been investigated, confirmed with PoC, and published under `data-input/006`. A second duplicate was already rejected under `cli-commands/026`.
+
+### Lesson Learned
+
+The `--limit` counting-at-wrong-granularity pattern for multi-row-expansion commands has been thoroughly investigated across multiple subsystems. Check `success/data-input/` for prior confirmed findings on this pattern before filing under a different subsystem.
