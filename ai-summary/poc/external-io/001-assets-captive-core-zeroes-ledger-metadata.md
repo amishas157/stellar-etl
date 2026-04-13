@@ -94,13 +94,13 @@ The code never reaches `TimePointToUTCTimeStamp()` (hypothesis target `internal/
 
 ### Demonstration
 
-The test confirms that calling `TransformAsset()` with a zero-value `xdr.LedgerCloseMeta{}` (exactly as constructed by `GetPaymentOperationsHistoryArchive`) causes an unrecoverable nil pointer dereference panic. The same call with a valid `LedgerCloseMeta` (as used by the non-captive-core path) succeeds and produces correct output, proving the asymmetry between the two code paths.
+The test confirms that calling `TransformAsset()` with a zero-value `xdr.LedgerCloseMeta{}` (exactly as constructed by `GetPaymentOperationsHistoryArchive`) causes an unrecoverable nil pointer dereference panic. The same call with a valid `LedgerCloseMeta` (as used by the non-captive-core path) succeeds and produces correct output, proving the asymmetry between the two code paths and that the `--captive-core` export path is completely non-functional.
 
 ### Test Body
 
 ```go
 func TestAssetTransformPanicsWithZeroLedgerCloseMeta(t *testing.T) {
-	// 1. Construct a valid Payment operation (same as existing tests)
+	// 1. Construct a valid Payment operation (same as existing asset tests)
 	paymentOp := xdr.Operation{
 		SourceAccount: nil,
 		Body: xdr.OperationBody{
@@ -156,10 +156,10 @@ func TestAssetTransformPanicsWithZeroLedgerCloseMeta(t *testing.T) {
 
 ```
 === RUN   TestAssetTransformPanicsWithZeroLedgerCloseMeta
-    data_integrity_poc_test.go:338: TransformAsset panicked as expected: runtime error: invalid memory address or nil pointer dereference
-    data_integrity_poc_test.go:349: Valid LCM path succeeded: AssetCode=USDT, LedgerSequence=2, ClosedAt=1970-01-01 00:00:10 +0000 UTC
-    data_integrity_poc_test.go:352: BUG CONFIRMED: export_assets --captive-core path panics due to zero LedgerCloseMeta
+    data_integrity_poc_test.go:339: TransformAsset panicked as expected: runtime error: invalid memory address or nil pointer dereference
+    data_integrity_poc_test.go:350: Valid LCM path succeeded: AssetCode=USDT, LedgerSequence=2, ClosedAt=1970-01-01 00:00:10 +0000 UTC
+    data_integrity_poc_test.go:353: BUG CONFIRMED: export_assets --captive-core path panics due to zero LedgerCloseMeta
 --- PASS: TestAssetTransformPanicsWithZeroLedgerCloseMeta (0.00s)
 PASS
-ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.697s
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.929s
 ```
