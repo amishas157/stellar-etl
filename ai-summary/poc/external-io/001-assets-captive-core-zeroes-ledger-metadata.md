@@ -80,3 +80,86 @@ The code never reaches `TimePointToUTCTimeStamp()` (hypothesis target `internal/
 - **Setup**: Construct an `AssetTransformInput` with a valid Payment operation but `LedgerCloseMeta: xdr.LedgerCloseMeta{}` (zero value)
 - **Steps**: Call `transform.TransformAsset()` with the zero LCM and a valid Payment operation
 - **Assertion**: Assert that the call panics with a nil pointer dereference (use `recover()` or `assert.Panics`). This demonstrates that the `--captive-core` path is non-functional. Alternatively, demonstrate that the non-captive-core path (with a real LCM) succeeds, confirming the asymmetry.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-13
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestAssetTransformPanicsWithZeroLedgerCloseMeta"
+**Test Language**: Go
+
+### Demonstration
+
+The test confirms that calling `TransformAsset()` with a zero-value `xdr.LedgerCloseMeta{}` (exactly as constructed by `GetPaymentOperationsHistoryArchive`) causes an unrecoverable nil pointer dereference panic. The same call with a valid `LedgerCloseMeta` (as used by the non-captive-core path) succeeds and produces correct output, proving the asymmetry between the two code paths.
+
+### Test Body
+
+```go
+func TestAssetTransformPanicsWithZeroLedgerCloseMeta(t *testing.T) {
+	// 1. Construct a valid Payment operation (same as existing tests)
+	paymentOp := xdr.Operation{
+		SourceAccount: nil,
+		Body: xdr.OperationBody{
+			Type: xdr.OperationTypePayment,
+			PaymentOp: &xdr.PaymentOp{
+				Destination: testAccount2,
+				Asset:       usdtAsset,
+				Amount:      350000000,
+			},
+		},
+	}
+
+	// 2. Use a zero-value LedgerCloseMeta — exactly what
+	//    GetPaymentOperationsHistoryArchive hard-codes at
+	//    internal/input/assets_history_archive.go:38
+	zeroLCM := xdr.LedgerCloseMeta{}
+
+	// 3. Demonstrate that calling TransformAsset with the zero LCM panics
+	panicked := false
+	var panicValue interface{}
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				panicked = true
+				panicValue = r
+			}
+		}()
+		_, _ = TransformAsset(paymentOp, 0, 0, 1, zeroLCM)
+	}()
+
+	if !panicked {
+		t.Errorf("Expected TransformAsset to panic with zero LedgerCloseMeta, but it did not")
+	}
+	t.Logf("TransformAsset panicked as expected: %v", panicValue)
+
+	// 4. Contrast: the same call with a valid LCM succeeds (non-captive-core path)
+	validLCM := genericLedgerCloseMeta
+	output, err := TransformAsset(paymentOp, 0, 0, 1, validLCM)
+	if err != nil {
+		t.Fatalf("TransformAsset with valid LCM should succeed, got error: %v", err)
+	}
+	if output.AssetCode != "USDT" {
+		t.Errorf("Expected AssetCode=USDT, got %s", output.AssetCode)
+	}
+	t.Logf("Valid LCM path succeeded: AssetCode=%s, LedgerSequence=%d, ClosedAt=%v",
+		output.AssetCode, output.LedgerSequence, output.ClosedAt)
+
+	t.Logf("BUG CONFIRMED: export_assets --captive-core path panics due to zero LedgerCloseMeta")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestAssetTransformPanicsWithZeroLedgerCloseMeta
+    data_integrity_poc_test.go:338: TransformAsset panicked as expected: runtime error: invalid memory address or nil pointer dereference
+    data_integrity_poc_test.go:349: Valid LCM path succeeded: AssetCode=USDT, LedgerSequence=2, ClosedAt=1970-01-01 00:00:10 +0000 UTC
+    data_integrity_poc_test.go:352: BUG CONFIRMED: export_assets --captive-core path panics due to zero LedgerCloseMeta
+--- PASS: TestAssetTransformPanicsWithZeroLedgerCloseMeta (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.697s
+```
