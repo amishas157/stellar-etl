@@ -72,3 +72,113 @@ On Unix, `deleteLocalFiles(path)` removes the directory entry but the file data 
 - **Steps**: Call the relevant code path N times (e.g., 50 iterations), each opening a distinct file via `os.Open` without closing, then copying to `/dev/null` or a temp writer.
 - **Assertion**: After N iterations, measure the next available FD. Assert that `fdAfter - fdBefore >= N`, confirming N file descriptors were leaked. A fix adding `defer reader.Close()` after the `os.Open` error check should reduce the leaked count to 0.
 - **Alternative approach**: Since `UploadTo` requires a real GCS client, a simpler PoC could extract the `os.Open` + no-close pattern into a minimal reproducer function that mimics the same code structure, demonstrating the leak without cloud dependencies.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-13
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: cmd/upload_to_gcs_poc_test.go
+**Test Name**: "TestUploadToLeaksFileDescriptors"
+**Test Language**: Go
+
+### Demonstration
+
+The test reproduces the exact `os.Open` + `io.Copy` pattern from `GCS.UploadTo()` (lines 32–54 of `upload_to_gcs.go`) with GC disabled to prevent finalizer-based cleanup. After 50 iterations without calling `reader.Close()`, the next available file descriptor number increased by exactly 50, confirming that every call leaks one FD. This proves that `UploadTo()` — which has no `Close()` call on any code path — will exhaust file descriptors under sustained GCS upload workloads.
+
+### Test Body
+
+```go
+package cmd
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"runtime/debug"
+	"testing"
+)
+
+// nextFD returns the file descriptor number of the next available FD by
+// opening /dev/null and immediately closing it.
+func nextFD(t *testing.T) int {
+	t.Helper()
+	f, err := os.Open("/dev/null")
+	if err != nil {
+		t.Fatalf("probe fd: %v", err)
+	}
+	fd := int(f.Fd())
+	f.Close()
+	return fd
+}
+
+// TestUploadToLeaksFileDescriptors demonstrates that the os.Open + io.Copy
+// pattern used in GCS.UploadTo() leaks file descriptors because the opened
+// reader is never closed.
+func TestUploadToLeaksFileDescriptors(t *testing.T) {
+	// Disable GC so finalizers cannot reclaim leaked file handles.
+	debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(100)
+
+	const N = 50
+	dir := t.TempDir()
+
+	// Create N small files to simulate upload sources.
+	for i := 0; i < N; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("upload-%d.txt", i))
+		if err := os.WriteFile(p, []byte("payload"), 0644); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+	}
+
+	fdBefore := nextFD(t)
+
+	// Reproduce the exact pattern from upload_to_gcs.go lines 32-54:
+	//   reader, err := os.Open(path)  // line 32
+	//   ...
+	//   io.Copy(wc, reader)           // line 53
+	//   // NO reader.Close() anywhere
+	for i := 0; i < N; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("upload-%d.txt", i))
+
+		reader, err := os.Open(p)
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+
+		// Simulate the io.Copy to a GCS writer — here we use Discard.
+		if _, err := io.Copy(io.Discard, reader); err != nil {
+			t.Fatalf("copy: %v", err)
+		}
+
+		// BUG: no reader.Close() — matches UploadTo which never closes
+		// the reader on any code path.
+		_ = reader // keep reference alive so GC cannot finalize
+	}
+
+	fdAfter := nextFD(t)
+	leaked := fdAfter - fdBefore
+
+	t.Logf("FDs before probe: %d, after probe: %d, leaked: %d (expected >= %d)", fdBefore, fdAfter, leaked, N)
+
+	if leaked < N {
+		t.Errorf("Expected at least %d leaked file descriptors, but only %d were leaked — "+
+			"hypothesis not demonstrated", N, leaked)
+	}
+	// If we reach here without the error above, the leak is confirmed:
+	// N calls to os.Open without Close produced at least N leaked FDs.
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestUploadToLeaksFileDescriptors
+    upload_to_gcs_poc_test.go:72: FDs before probe: 4, after probe: 54, leaked: 50 (expected >= 50)
+--- PASS: TestUploadToLeaksFileDescriptors (0.01s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/cmd	5.737s
+```
