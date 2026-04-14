@@ -134,4 +134,5 @@
 - `external-io/024-gcs-upload-leaks-source-file-descriptors.md` — Medium — `UploadTo()` leaves local upload readers open until GC and can exhaust file descriptors during repeated GCS uploads
 - `data-integrity/022-offer-operation-details-price-rounded-to-zero.md` — Critical — offer-operation `details.price` parses `xdr.Price.String()` and silently rounds tiny non-zero prices down to `0`
 - `data-integrity/023-failed-liquidity-pool-ops-fabricate-native-reserves.md` — High — failed liquidity-pool deposit/withdraw rows serialize unknown reserve assets as fabricated `native/native`
+- `data-integrity/024-change-trust-limit-float64-rounding.md` — Critical — large `change_trust` limits collapse to the same exported JSON number after lossy `float64` conversion
 - `export-pipeline/023-ledger-parquet-evicted-key-tags-break-writer.md` — Medium — `export_ledgers --write-parquet` cannot initialize its Parquet writer because ledger evicted-key slices use invalid Parquet tags
