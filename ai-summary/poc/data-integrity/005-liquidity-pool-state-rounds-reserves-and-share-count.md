@@ -74,3 +74,154 @@ Traced the complete code path from `TransformPool()` (liquidity_pool.go:66-88) t
 - **Setup**: Create two `ingest.Change` objects containing liquidity pool entries with `ReserveA` values of `90071992547409930` and `90071992547409931` (adjacent stroops above 2^53). Use identical pool parameters for everything else.
 - **Steps**: Call `TransformPool()` on both changes. Compare the resulting `PoolOutput.AssetAReserve` values. Also serialize both outputs with `json.Marshal` and compare the `asset_a_amount` JSON fields.
 - **Assertion**: Assert that both `AssetAReserve` float64 values are equal (demonstrating the collision). Assert that both serialized JSON `asset_a_amount` values are identical strings despite different source stroops. Repeat for `PoolShareCount` with `TotalPoolShares` values of `90071992547409930` vs `90071992547409931`.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-14
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestPoolReserveFloat64PrecisionLoss"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs two liquidity pool ledger entries differing by 1 stroop in `ReserveA` (90071992547409930 vs 90071992547409931, above 2^53) and passes both through `TransformPool()`. The resulting `AssetAReserve` float64 values are identical (9007199254.7409935), and JSON serialization produces the same `asset_a_amount` string for both. The same collision is confirmed for `PoolShareCount` via `TotalPoolShares`. This proves that the pool state export silently loses single-stroop precision for large reserves, with no companion exact field to recover the true value.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"encoding/json"
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/ingest"
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestPoolReserveFloat64PrecisionLoss demonstrates that two liquidity pool
+// entries differing by 1 stroop in ReserveA (above 2^53) produce the same
+// exported float64 value, silently corrupting reserve accounting.
+func TestPoolReserveFloat64PrecisionLoss(t *testing.T) {
+	// Two adjacent stroop values above 2^53 where float64 cannot distinguish them
+	stroopA := xdr.Int64(90071992547409930)
+	stroopB := xdr.Int64(90071992547409931)
+
+	header := xdr.LedgerHeaderHistoryEntry{
+		Header: xdr.LedgerHeader{
+			ScpValue: xdr.StellarValue{CloseTime: 1000},
+			LedgerSeq: 10,
+		},
+	}
+
+	makeChange := func(reserveA, reserveB, totalShares xdr.Int64) ingest.Change {
+		entry := xdr.LedgerEntry{
+			LastModifiedLedgerSeq: 30705278,
+			Data: xdr.LedgerEntryData{
+				Type: xdr.LedgerEntryTypeLiquidityPool,
+				LiquidityPool: &xdr.LiquidityPoolEntry{
+					LiquidityPoolId: xdr.PoolId{23, 45, 67},
+					Body: xdr.LiquidityPoolEntryBody{
+						Type: xdr.LiquidityPoolTypeLiquidityPoolConstantProduct,
+						ConstantProduct: &xdr.LiquidityPoolEntryConstantProduct{
+							Params: xdr.LiquidityPoolConstantProductParameters{
+								AssetA: lpAssetA,
+								AssetB: lpAssetB,
+								Fee:    30,
+							},
+							ReserveA:                 reserveA,
+							ReserveB:                 100,
+							TotalPoolShares:          totalShares,
+							PoolSharesTrustLineCount: 5,
+						},
+					},
+				},
+			},
+		}
+		return ingest.Change{
+			ChangeType: xdr.LedgerEntryChangeTypeLedgerEntryUpdated,
+			Type:       xdr.LedgerEntryTypeLiquidityPool,
+			Pre:        &entry,
+			Post:       &entry,
+		}
+	}
+
+	// Test 1: ReserveA precision loss
+	changeA := makeChange(stroopA, 100, 35)
+	changeB := makeChange(stroopB, 100, 35)
+
+	outA, err := TransformPool(changeA, header)
+	if err != nil {
+		t.Fatalf("TransformPool(changeA) error: %v", err)
+	}
+	outB, err := TransformPool(changeB, header)
+	if err != nil {
+		t.Fatalf("TransformPool(changeB) error: %v", err)
+	}
+
+	// Precondition: source stroop values genuinely differ
+	if stroopA == stroopB {
+		t.Fatal("precondition: source stroop values must differ")
+	}
+
+	// Bug proven: both outputs produce the same float64 despite different inputs
+	if outA.AssetAReserve != outB.AssetAReserve {
+		t.Errorf("expected AssetAReserve collision but got different values: %v vs %v", outA.AssetAReserve, outB.AssetAReserve)
+	} else {
+		t.Logf("CONFIRMED: AssetAReserve precision loss — stroops %d and %d both map to %.20f",
+			stroopA, stroopB, outA.AssetAReserve)
+	}
+
+	// Also confirm JSON serialization produces identical strings
+	jsonA, _ := json.Marshal(outA)
+	jsonB, _ := json.Marshal(outB)
+
+	var mapA, mapB map[string]interface{}
+	json.Unmarshal(jsonA, &mapA)
+	json.Unmarshal(jsonB, &mapB)
+
+	amountA := mapA["asset_a_amount"]
+	amountB := mapB["asset_a_amount"]
+	if amountA != amountB {
+		t.Errorf("expected JSON asset_a_amount collision but values differ: %v vs %v", amountA, amountB)
+	} else {
+		t.Logf("CONFIRMED: JSON asset_a_amount collision — both serialize to %v despite different source stroops", amountA)
+	}
+
+	// Test 2: TotalPoolShares precision loss
+	changeC := makeChange(100, 100, stroopA)
+	changeD := makeChange(100, 100, stroopB)
+
+	outC, err := TransformPool(changeC, header)
+	if err != nil {
+		t.Fatalf("TransformPool(changeC) error: %v", err)
+	}
+	outD, err := TransformPool(changeD, header)
+	if err != nil {
+		t.Fatalf("TransformPool(changeD) error: %v", err)
+	}
+
+	if outC.PoolShareCount != outD.PoolShareCount {
+		t.Errorf("expected PoolShareCount collision but got different values: %v vs %v", outC.PoolShareCount, outD.PoolShareCount)
+	} else {
+		t.Logf("CONFIRMED: PoolShareCount precision loss — stroops %d and %d both map to %.20f",
+			stroopA, stroopB, outC.PoolShareCount)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestPoolReserveFloat64PrecisionLoss
+    data_integrity_poc_test.go:80: CONFIRMED: AssetAReserve precision loss — stroops 90071992547409930 and 90071992547409931 both map to 9007199254.74099349975585937500
+    data_integrity_poc_test.go:97: CONFIRMED: JSON asset_a_amount collision — both serialize to 9.007199254740993e+09 despite different source stroops
+    data_integrity_poc_test.go:116: CONFIRMED: PoolShareCount precision loss — stroops 90071992547409930 and 90071992547409931 both map to 9007199254.74099349975585937500
+--- PASS: TestPoolReserveFloat64PrecisionLoss (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	1.004s
+```
