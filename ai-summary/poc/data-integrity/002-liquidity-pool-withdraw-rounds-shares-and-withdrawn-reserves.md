@@ -73,3 +73,195 @@ Traced the LP withdraw branch in `extractOperationDetails()` (operation.go:1021-
 - **Setup**: Create two `LiquidityPoolWithdrawOp` operations with `Amount` (shares) values of `90071992547409930` and `90071992547409931` (xdr.Int64). Each must be wrapped in a successful `ingest.LedgerTransaction` with LP metadata that includes a `LiquidityPoolEntry` in both pre and post states so `getLiquidityPoolAndProductDelta()` can compute deltas. Set up the LP reserve changes so that `receivedA` and `receivedB` also exceed the precision threshold.
 - **Steps**: Call `TransformOperation()` for each operation. Extract `details["shares"]`, `details["reserve_a_withdraw_amount"]`, and `details["reserve_b_withdraw_amount"]` from both outputs.
 - **Assertion**: Assert that the two `details["shares"]` float64 values are identical despite distinct stroop inputs (demonstrating the collision). Separately, assert that `amount.String()` on the same Int64 values produces distinct strings, confirming the exact representation is available. Optionally, verify the same collision for `reserve_a_withdraw_amount` and `reserve_b_withdraw_amount` using LP metadata with large reserve deltas differing by 1 stroop.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-14
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestLPWithdrawRoundsSharesAndReserves"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs two successful `liquidity_pool_withdraw` operations with share amounts and reserve deltas differing by exactly 1 stroop at magnitude ~9×10^16. After running through the production `extractOperationDetails()` code path, all three financial fields — `shares`, `reserve_a_withdraw_amount`, and `reserve_b_withdraw_amount` — collapse to identical float64 values (9007199254.7409934998) despite distinct integer inputs. This confirms that `ConvertStroopValueToReal()` discards precision for amounts above ~4.5×10^15 stroops, and no companion field preserves the exact value.
+
+### Test Body
+
+```go
+func TestLPWithdrawRoundsSharesAndReserves(t *testing.T) {
+	// Two adjacent stroop values above the float64 exact-decimal threshold.
+	// float64 has 53 bits of mantissa; 1-stroop precision (1e-7 XLM) is lost
+	// when the XLM value exceeds ~4.5e8, i.e., stroops > ~4.5e15.
+	shares1 := xdr.Int64(90071992547409930)
+	shares2 := xdr.Int64(90071992547409931)
+
+	// Large reserve deltas that also differ by 1 stroop.
+	reserveDeltaA1 := xdr.Int64(90071992547409930)
+	reserveDeltaA2 := xdr.Int64(90071992547409931)
+	reserveDeltaB1 := xdr.Int64(90071992547409930)
+	reserveDeltaB2 := xdr.Int64(90071992547409931)
+
+	poolID := xdr.PoolId{1, 2, 3, 4, 5, 6, 7, 8, 9}
+
+	// buildWithdrawTx constructs a successful LP-withdraw transaction whose
+	// metadata encodes the given reserve deltas (pre-state reserves equal to
+	// the delta, post-state reserves of zero).
+	buildWithdrawTx := func(sharesAmt, deltaA, deltaB xdr.Int64) (xdr.Operation, ingest.LedgerTransaction) {
+		op := xdr.Operation{
+			Body: xdr.OperationBody{
+				Type: xdr.OperationTypeLiquidityPoolWithdraw,
+				LiquidityPoolWithdrawOp: &xdr.LiquidityPoolWithdrawOp{
+					LiquidityPoolId: poolID,
+					Amount:          sharesAmt,
+					MinAmountA:      1,
+					MinAmountB:      1,
+				},
+			},
+		}
+
+		successResult := utils.CreateSampleResultMeta(true, 1)
+
+		envelope := xdr.TransactionV1Envelope{
+			Tx: xdr.Transaction{
+				SourceAccount: testAccount3,
+				Operations:    []xdr.Operation{op},
+			},
+		}
+
+		// For a withdraw: receivedX = -(postX - preX) = preX - postX.
+		// Set pre = deltaX, post = 0 so receivedX = deltaX.
+		lpMeta := xdr.OperationMeta{
+			Changes: xdr.LedgerEntryChanges{
+				{
+					Type: xdr.LedgerEntryChangeTypeLedgerEntryState,
+					State: &xdr.LedgerEntry{
+						Data: xdr.LedgerEntryData{
+							Type: xdr.LedgerEntryTypeLiquidityPool,
+							LiquidityPool: &xdr.LiquidityPoolEntry{
+								LiquidityPoolId: poolID,
+								Body: xdr.LiquidityPoolEntryBody{
+									Type: xdr.LiquidityPoolTypeLiquidityPoolConstantProduct,
+									ConstantProduct: &xdr.LiquidityPoolEntryConstantProduct{
+										Params: xdr.LiquidityPoolConstantProductParameters{
+											AssetA: lpAssetA,
+											AssetB: lpAssetB,
+											Fee:    30,
+										},
+										ReserveA:        deltaA,
+										ReserveB:        deltaB,
+										TotalPoolShares: sharesAmt + 1000,
+									},
+								},
+							},
+						},
+					},
+				},
+				{
+					Type: xdr.LedgerEntryChangeTypeLedgerEntryUpdated,
+					Updated: &xdr.LedgerEntry{
+						Data: xdr.LedgerEntryData{
+							Type: xdr.LedgerEntryTypeLiquidityPool,
+							LiquidityPool: &xdr.LiquidityPoolEntry{
+								LiquidityPoolId: poolID,
+								Body: xdr.LiquidityPoolEntryBody{
+									Type: xdr.LiquidityPoolTypeLiquidityPoolConstantProduct,
+									ConstantProduct: &xdr.LiquidityPoolEntryConstantProduct{
+										Params: xdr.LiquidityPoolConstantProductParameters{
+											AssetA: lpAssetA,
+											AssetB: lpAssetB,
+											Fee:    30,
+										},
+										ReserveA:        0,
+										ReserveB:        0,
+										TotalPoolShares: 1000,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		tx := ingest.LedgerTransaction{
+			Index: 1,
+			Envelope: xdr.TransactionEnvelope{
+				Type: xdr.EnvelopeTypeEnvelopeTypeTx,
+				V1:   &envelope,
+			},
+			Result: successResult.Result,
+			UnsafeMeta: xdr.TransactionMeta{
+				V: 1,
+				V1: &xdr.TransactionMetaV1{
+					Operations: []xdr.OperationMeta{lpMeta},
+				},
+			},
+		}
+		return op, tx
+	}
+
+	op1, tx1 := buildWithdrawTx(shares1, reserveDeltaA1, reserveDeltaB1)
+	op2, tx2 := buildWithdrawTx(shares2, reserveDeltaA2, reserveDeltaB2)
+
+	details1, err := extractOperationDetails(op1, tx1, 0, "Test SDF Network ; September 2015")
+	if err != nil {
+		t.Fatalf("extractOperationDetails op1: %v", err)
+	}
+	details2, err := extractOperationDetails(op2, tx2, 0, "Test SDF Network ; September 2015")
+	if err != nil {
+		t.Fatalf("extractOperationDetails op2: %v", err)
+	}
+
+	// --- shares collision ---
+	sharesOut1 := details1["shares"].(float64)
+	sharesOut2 := details2["shares"].(float64)
+	if shares1 == shares2 {
+		t.Fatal("test setup error: shares inputs are identical")
+	}
+	if sharesOut1 != sharesOut2 {
+		t.Fatalf("expected shares float64 collision, got different values: %.20g vs %.20g", sharesOut1, sharesOut2)
+	}
+	t.Logf("SHARES COLLISION: stroops %d and %d both export as %.20g", shares1, shares2, sharesOut1)
+
+	// --- reserve_a_withdraw_amount collision ---
+	resAOut1 := details1["reserve_a_withdraw_amount"].(float64)
+	resAOut2 := details2["reserve_a_withdraw_amount"].(float64)
+	if reserveDeltaA1 == reserveDeltaA2 {
+		t.Fatal("test setup error: reserveA inputs are identical")
+	}
+	if resAOut1 != resAOut2 {
+		t.Fatalf("expected reserve_a_withdraw_amount collision, got different values: %.20g vs %.20g", resAOut1, resAOut2)
+	}
+	t.Logf("RESERVE_A COLLISION: stroops %d and %d both export as %.20g", reserveDeltaA1, reserveDeltaA2, resAOut1)
+
+	// --- reserve_b_withdraw_amount collision ---
+	resBOut1 := details1["reserve_b_withdraw_amount"].(float64)
+	resBOut2 := details2["reserve_b_withdraw_amount"].(float64)
+	if reserveDeltaB1 == reserveDeltaB2 {
+		t.Fatal("test setup error: reserveB inputs are identical")
+	}
+	if resBOut1 != resBOut2 {
+		t.Fatalf("expected reserve_b_withdraw_amount collision, got different values: %.20g vs %.20g", resBOut1, resBOut2)
+	}
+	t.Logf("RESERVE_B COLLISION: stroops %d and %d both export as %.20g", reserveDeltaB1, reserveDeltaB2, resBOut1)
+
+	t.Log("BUG CONFIRMED: LP withdraw shares and reserve amounts lose precision via float64 rounding")
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestLPWithdrawRoundsSharesAndReserves
+    data_integrity_poc_test.go:305: SHARES COLLISION: stroops 90071992547409930 and 90071992547409931 both export as 9007199254.7409934998
+    data_integrity_poc_test.go:316: RESERVE_A COLLISION: stroops 90071992547409930 and 90071992547409931 both export as 9007199254.7409934998
+    data_integrity_poc_test.go:327: RESERVE_B COLLISION: stroops 90071992547409930 and 90071992547409931 both export as 9007199254.7409934998
+    data_integrity_poc_test.go:329: BUG CONFIRMED: LP withdraw shares and reserve amounts lose precision via float64 rounding
+--- PASS: TestLPWithdrawRoundsSharesAndReserves (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.649s
+```
