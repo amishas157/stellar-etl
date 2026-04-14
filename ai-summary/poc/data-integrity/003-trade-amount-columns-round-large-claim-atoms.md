@@ -76,3 +76,203 @@ The code path is live and exercised by `export_trades` via `TransformTrade()` fo
 - **Setup**: Construct two `ingest.LedgerTransaction` objects with successful ManageSellOffer results. Each should contain a single `ClaimAtom` with `AmountSold = 90071992547409930` for the first and `AmountSold = 90071992547409931` for the second. Use existing test helper patterns (`utils.CreateSampleTx`, or construct XDR directly as done in existing trade tests).
 - **Steps**: Call `TransformTrade()` for each transaction. Extract `SellingAmount` from the first element of each returned `[]TradeOutput`.
 - **Assertion**: Assert that the two `SellingAmount` values are equal (`==`), demonstrating that distinct on-chain amounts collapse to the same exported value. Optionally, marshal both `TradeOutput` structs to JSON and assert byte-equality of the `selling_amount` field.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-14
+**PoC by**: claude-opus-4.6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestTradeAmountRoundsLargeClaimAtoms"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs two ManageSellOffer transactions with claim atoms whose `AmountSold` values differ by exactly 1 stroop (90071992547409930 vs 90071992547409931). After running both through `TransformTrade()`, the resulting `SellingAmount` float64 values are identical (9007199254.74099349975585937500), proving that the ETL permanently loses stroop-level precision for large trade amounts. A direct call to `ConvertStroopValueToReal` independently confirms the same collapse.
+
+### Test Body
+
+```go
+func TestTradeAmountRoundsLargeClaimAtoms(t *testing.T) {
+	// Two amounts that differ by exactly 1 stroop but are large enough
+	// that float64 cannot distinguish them after division by 1e7.
+	const amountA xdr.Int64 = 90071992547409930
+	const amountB xdr.Int64 = 90071992547409931
+
+	// Sanity: these are genuinely different int64 values
+	if int64(amountA) == int64(amountB) {
+		t.Fatal("test setup error: amounts should be distinct int64 values")
+	}
+
+	sellerAccount := testAccount1ID
+	closeTime := time.Unix(1000, 0)
+
+	buildTx := func(soldAmount xdr.Int64) ingest.LedgerTransaction {
+		envelope := xdr.TransactionV1Envelope{
+			Tx: xdr.Transaction{
+				SourceAccount: genericSourceAccount,
+				Operations: []xdr.Operation{
+					{
+						SourceAccount: nil,
+						Body: xdr.OperationBody{
+							Type:              xdr.OperationTypeManageSellOffer,
+							ManageSellOfferOp: &xdr.ManageSellOfferOp{},
+						},
+					},
+				},
+			},
+		}
+
+		// Build operation changes so findTradeSellPrice can locate the offer
+		offerEntry := xdr.LedgerEntry{
+			Data: xdr.LedgerEntryData{
+				Type: xdr.LedgerEntryTypeOffer,
+				Offer: &xdr.OfferEntry{
+					SellerId: sellerAccount,
+					OfferId:  12345,
+					Price:    xdr.Price{N: 1, D: 1},
+				},
+			},
+		}
+
+		return ingest.LedgerTransaction{
+			Index: 1,
+			Envelope: xdr.TransactionEnvelope{
+				Type: xdr.EnvelopeTypeEnvelopeTypeTx,
+				V1:   &envelope,
+			},
+			Result: utils.CreateSampleResultMeta(true, 1).Result,
+			UnsafeMeta: xdr.TransactionMeta{
+				V: 1,
+				V1: &xdr.TransactionMetaV1{
+					Operations: []xdr.OperationMeta{
+						{
+							Changes: xdr.LedgerEntryChanges{
+								{
+									Type:  xdr.LedgerEntryChangeTypeLedgerEntryState,
+									State: &offerEntry,
+								},
+								{
+									Type:    xdr.LedgerEntryChangeTypeLedgerEntryRemoved,
+									Removed: &xdr.LedgerKey{Type: xdr.LedgerEntryTypeOffer},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	// Override the result to use our custom claim atoms
+	txA := buildTx(amountA)
+	txA.Result = wrapOperationsResultsSlice([]xdr.OperationResult{
+		{
+			Code: xdr.OperationResultCodeOpInner,
+			Tr: &xdr.OperationResultTr{
+				Type: xdr.OperationTypeManageSellOffer,
+				ManageSellOfferResult: &xdr.ManageSellOfferResult{
+					Code: xdr.ManageSellOfferResultCodeManageSellOfferSuccess,
+					Success: &xdr.ManageOfferSuccessResult{
+						OffersClaimed: []xdr.ClaimAtom{
+							{
+								Type: xdr.ClaimAtomTypeClaimAtomTypeOrderBook,
+								OrderBook: &xdr.ClaimOfferAtom{
+									SellerId:     sellerAccount,
+									OfferId:      12345,
+									AssetSold:    nativeAsset,
+									AssetBought:  usdtAsset,
+									AmountSold:   amountA,
+									AmountBought: 1000,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}, true)
+
+	txB := buildTx(amountB)
+	txB.Result = wrapOperationsResultsSlice([]xdr.OperationResult{
+		{
+			Code: xdr.OperationResultCodeOpInner,
+			Tr: &xdr.OperationResultTr{
+				Type: xdr.OperationTypeManageSellOffer,
+				ManageSellOfferResult: &xdr.ManageSellOfferResult{
+					Code: xdr.ManageSellOfferResultCodeManageSellOfferSuccess,
+					Success: &xdr.ManageOfferSuccessResult{
+						OffersClaimed: []xdr.ClaimAtom{
+							{
+								Type: xdr.ClaimAtomTypeClaimAtomTypeOrderBook,
+								OrderBook: &xdr.ClaimOfferAtom{
+									SellerId:     sellerAccount,
+									OfferId:      12345,
+									AssetSold:    nativeAsset,
+									AssetBought:  usdtAsset,
+									AmountSold:   amountB,
+									AmountBought: 1000,
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}, true)
+
+	tradesA, errA := TransformTrade(0, 100, txA, closeTime)
+	if errA != nil {
+		t.Fatalf("TransformTrade for amountA failed: %v", errA)
+	}
+	if len(tradesA) == 0 {
+		t.Fatal("expected at least one trade for amountA")
+	}
+
+	tradesB, errB := TransformTrade(0, 100, txB, closeTime)
+	if errB != nil {
+		t.Fatalf("TransformTrade for amountB failed: %v", errB)
+	}
+	if len(tradesB) == 0 {
+		t.Fatal("expected at least one trade for amountB")
+	}
+
+	sellingA := tradesA[0].SellingAmount
+	sellingB := tradesB[0].SellingAmount
+
+	// The bug: two distinct on-chain stroop amounts produce IDENTICAL float64 outputs.
+	// If the code were correct, sellingA != sellingB. But due to float64 precision loss,
+	// they are equal — proving the data integrity issue.
+	if sellingA == sellingB {
+		t.Logf("BUG CONFIRMED: distinct claim-atom AmountSold values (%d vs %d) "+
+			"produce identical SellingAmount: %.20f",
+			amountA, amountB, sellingA)
+	} else {
+		t.Errorf("Expected SellingAmount to be equal (demonstrating precision loss) "+
+			"but got different values: %.20f vs %.20f", sellingA, sellingB)
+	}
+
+	// Additionally verify via ConvertStroopValueToReal directly
+	directA := utils.ConvertStroopValueToReal(amountA)
+	directB := utils.ConvertStroopValueToReal(amountB)
+	if directA == directB {
+		t.Logf("Direct confirmation: ConvertStroopValueToReal(%d) == ConvertStroopValueToReal(%d) == %.20f",
+			amountA, amountB, directA)
+	} else {
+		t.Errorf("Expected ConvertStroopValueToReal to produce equal values for %d and %d", amountA, amountB)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestTradeAmountRoundsLargeClaimAtoms
+    data_integrity_poc_test.go:167: BUG CONFIRMED: distinct claim-atom AmountSold values (90071992547409930 vs 90071992547409931) produce identical SellingAmount: 9007199254.74099349975585937500
+    data_integrity_poc_test.go:179: Direct confirmation: ConvertStroopValueToReal(90071992547409930) == ConvertStroopValueToReal(90071992547409931) == 9007199254.74099349975585937500
+--- PASS: TestTradeAmountRoundsLargeClaimAtoms (0.00s)
+PASS
+ok  	github.com/stellar/stellar-etl/v2/internal/transform	0.657s
+```
