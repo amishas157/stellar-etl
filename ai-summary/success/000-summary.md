@@ -103,6 +103,7 @@
 - `external-io/014-sponsor-null-collapses-to-empty-string.md` — High — ledger-entry Parquet export rewrites null `sponsor` values to empty strings
 - `external-io/016-transaction-family-exports-return-empty-success-on-bad-ranges.md` — High — six transaction-family export commands accept impossible bounded ranges and return empty success-shaped output
 - `external-io/017-export-assets-zero-limit-emits-first-ledger-assets.md` — Medium — `export_assets --limit 0` still scans the first in-range ledger and can emit non-empty asset rows
+- `data-integrity/025-liquidity-pool-withdraw-detail-float64-rounding.md` — Critical — liquidity-pool withdraw details round large burned shares and realized reserve amounts
 - `export-pipeline/024-transaction-parquet-archived-entry-slice-crashes.md` — Medium — `export_transactions --write-parquet` aborts when `soroban_resources_archived_entries` is non-empty because `TransactionOutputParquet` exposes `[]uint32` under a signed `INT32` parquet field
 - `data-integrity/023-failed-liquidity-pool-ops-fabricate-native-reserves.md` — High — failed liquidity-pool deposit/withdraw rows serialize unknown reserve assets as fabricated `native/native`
 - `export-pipeline/019-config-parallel-compute-exports-empty-shell.md` — High — config-setting export drops `ledger_max_dependent_tx_clusters` from `CONFIG_SETTING_CONTRACT_PARALLEL_COMPUTE_V0`
