@@ -74,3 +74,123 @@ Traced the complete path from `OfferEntry.Amount` (XDR `Int64`) through `Transfo
 - **Setup**: Construct two `ingest.Change` objects with `OfferEntry.Amount` values of `90071992547409930` and `90071992547409931` (differ by 1 stroop). Use identical seller, assets, price, and offer ID otherwise.
 - **Steps**: Call `TransformOffer()` on each change. Compare the resulting `OfferOutput.Amount` values.
 - **Assertion**: Assert that the two `Amount` values are NOT equal (this assertion will FAIL, proving the bug). Also verify via `json.Marshal` that both rows serialize to the same `"amount"` JSON number.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-14
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestOfferAmountRoundsLargeStroopValues"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs two offer entries with stroop values 90071992547409930 and 90071992547409931 (differing by 1), runs both through `TransformOffer()`, and verifies that the resulting `OfferOutput.Amount` float64 values are identical — proving that the `float64` conversion silently collapses distinct financial values. JSON serialization confirms both export to the same number `9007199254.740993`.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"encoding/json"
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/ingest"
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestOfferAmountRoundsLargeStroopValues demonstrates that two offers
+// differing by 1 stroop at large magnitudes produce identical float64
+// Amount values after TransformOffer, proving precision loss in the
+// exported financial field.
+func TestOfferAmountRoundsLargeStroopValues(t *testing.T) {
+	// Two stroop values that differ by 1, both above the float64
+	// exact-integer boundary (~2^53 ≈ 9.007×10^15).
+	const stroopA xdr.Int64 = 90071992547409930
+	const stroopB xdr.Int64 = 90071992547409931
+
+	header := xdr.LedgerHeaderHistoryEntry{
+		Header: xdr.LedgerHeader{
+			ScpValue: xdr.StellarValue{
+				CloseTime: 1000,
+			},
+			LedgerSeq: 10,
+		},
+	}
+
+	changeA := wrapOfferEntry(xdr.OfferEntry{
+		SellerId: genericAccountID,
+		OfferId:  1,
+		Selling:  nativeAsset,
+		Buying:   nativeAsset,
+		Amount:   stroopA,
+		Price:    xdr.Price{N: 1, D: 1},
+	}, 1)
+
+	changeB := wrapOfferEntry(xdr.OfferEntry{
+		SellerId: genericAccountID,
+		OfferId:  2,
+		Selling:  nativeAsset,
+		Buying:   nativeAsset,
+		Amount:   stroopB,
+		Price:    xdr.Price{N: 1, D: 1},
+	}, 1)
+
+	outputA, err := TransformOffer(changeA, header)
+	if err != nil {
+		t.Fatalf("TransformOffer(A) error: %v", err)
+	}
+
+	outputB, err := TransformOffer(changeB, header)
+	if err != nil {
+		t.Fatalf("TransformOffer(B) error: %v", err)
+	}
+
+	// The two stroop values differ by 1, so the exported amounts
+	// SHOULD differ. If they are equal, precision was lost.
+	if outputA.Amount == outputB.Amount {
+		t.Errorf("Amount precision lost: two offers with stroops %d and %d "+
+			"both exported Amount = %v", stroopA, stroopB, outputA.Amount)
+	}
+
+	// Also verify via JSON serialization that the values are indistinguishable.
+	jsonA, _ := json.Marshal(outputA.Amount)
+	jsonB, _ := json.Marshal(outputB.Amount)
+	if string(jsonA) == string(jsonB) {
+		t.Errorf("JSON serialization collapsed distinct stroops: "+
+			"both serialize to %s", string(jsonA))
+	}
+}
+
+// wrapOfferEntryForPoC is a helper identical to wrapOfferEntry; defined here
+// so the PoC is self-contained if the existing helper ever moves.
+func wrapOfferEntryForPoC(offerEntry xdr.OfferEntry, lastModified int) ingest.Change {
+	return ingest.Change{
+		ChangeType: xdr.LedgerEntryChangeTypeLedgerEntryCreated,
+		Type:       xdr.LedgerEntryTypeOffer,
+		Pre:        nil,
+		Post: &xdr.LedgerEntry{
+			LastModifiedLedgerSeq: xdr.Uint32(lastModified),
+			Data: xdr.LedgerEntryData{
+				Type:  xdr.LedgerEntryTypeOffer,
+				Offer: &offerEntry,
+			},
+		},
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestOfferAmountRoundsLargeStroopValues
+    data_integrity_poc_test.go:61: Amount precision lost: two offers with stroops 90071992547409930 and 90071992547409931 both exported Amount = 9.007199254740993e+09
+    data_integrity_poc_test.go:69: JSON serialization collapsed distinct stroops: both serialize to 9007199254.740993
+--- FAIL: TestOfferAmountRoundsLargeStroopValues (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.960s
+```
