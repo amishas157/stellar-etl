@@ -1,6 +1,6 @@
 # Failed Investigations: cli-commands Subsystem
 
-Condensed failure summaries for investigations targeting the cli-commands subsystem. Last updated 2026-04-12.
+Condensed failure summaries for investigations targeting the cli-commands subsystem. Last updated 2026-04-14.
 
 ## Summary Table
 

@@ -139,3 +139,4 @@
 - `data-integrity/024-change-trust-limit-float64-rounding.md` — Critical — large `change_trust` limits collapse to the same exported JSON number after lossy `float64` conversion
 - `data-integrity/026-trade-amount-float64-rounding.md` — Critical — `history_trades` `selling_amount` and `buying_amount` collapse adjacent large claim-atom values after lossy `float64` conversion
 - `export-pipeline/023-ledger-parquet-evicted-key-tags-break-writer.md` — Medium — `export_ledgers --write-parquet` cannot initialize its Parquet writer because ledger evicted-key slices use invalid Parquet tags
+- `data-integrity/028-liquidity-pool-state-float64-rounding.md` — Critical — liquidity-pool state export collapses adjacent large reserve and pool-share amounts after lossy `float64` conversion
