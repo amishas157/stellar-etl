@@ -72,3 +72,102 @@ The finding is real — the exported `price` column contains incorrect (indistin
 - **Setup**: Construct two `ingest.Change` objects with `OfferEntry.Price` set to `{N: 2147478646, D: 2147478647}` and `{N: 2147478647, D: 2147478648}` respectively. Use a minimal valid `LedgerHeaderHistoryEntry`.
 - **Steps**: Call `TransformOffer()` on each change. Extract the `Price` field from each `OfferOutput`.
 - **Assertion**: Assert that `output1.PriceN != output2.PriceN` (distinct on-chain values) but `output1.Price == output2.Price` (collapsed float64 values). This demonstrates the scalar price field cannot distinguish these two distinct on-chain prices.
+
+---
+
+## PoC Attempt
+
+**Result**: POC_PASS
+**Date**: 2026-04-16
+**PoC by**: claude-opus-4-6, high
+**Target Test File**: internal/transform/data_integrity_poc_test.go
+**Test Name**: "TestOfferPriceFloat64CollidesDistinctRationals"
+**Test Language**: Go
+
+### Demonstration
+
+The test constructs two offer entries with distinct on-chain prices `2147478646/2147478647` and `2147478647/2147478648`, runs both through `TransformOffer()`, and confirms that while `PriceN`/`PriceD` remain distinct, the exported `Price` float64 field is identical (`9.99999999534337602469e-01`) for both. This proves the scalar price column cannot distinguish these two valid on-chain prices.
+
+### Test Body
+
+```go
+package transform
+
+import (
+	"testing"
+
+	"github.com/stellar/go-stellar-sdk/xdr"
+)
+
+// TestOfferPriceFloat64CollidesDistinctRationals demonstrates that two distinct
+// on-chain Price rationals collapse to the same float64 scalar when both
+// numerator and denominator are near int32 max.
+func TestOfferPriceFloat64CollidesDistinctRationals(t *testing.T) {
+	header := xdr.LedgerHeaderHistoryEntry{
+		Header: xdr.LedgerHeader{
+			ScpValue: xdr.StellarValue{CloseTime: 1000},
+			LedgerSeq: 10,
+		},
+	}
+
+	// Two distinct on-chain prices near int32 max
+	price1 := xdr.Price{N: 2147478646, D: 2147478647}
+	price2 := xdr.Price{N: 2147478647, D: 2147478648}
+
+	change1 := wrapOfferEntry(xdr.OfferEntry{
+		SellerId: genericAccountID,
+		OfferId:  1,
+		Selling:  nativeAsset,
+		Buying:   nativeAsset,
+		Amount:   100,
+		Price:    price1,
+	}, 1)
+
+	change2 := wrapOfferEntry(xdr.OfferEntry{
+		SellerId: genericAccountID,
+		OfferId:  2,
+		Selling:  nativeAsset,
+		Buying:   nativeAsset,
+		Amount:   100,
+		Price:    price2,
+	}, 1)
+
+	out1, err := TransformOffer(change1, header)
+	if err != nil {
+		t.Fatalf("TransformOffer for price1 failed: %v", err)
+	}
+
+	out2, err := TransformOffer(change2, header)
+	if err != nil {
+		t.Fatalf("TransformOffer for price2 failed: %v", err)
+	}
+
+	// Confirm the on-chain rational components are distinct
+	if out1.PriceN == out2.PriceN && out1.PriceD == out2.PriceD {
+		t.Fatal("precondition failed: the two prices have identical N/D, test is invalid")
+	}
+
+	// Demonstrate the bug: distinct rationals collapse to the same float64
+	if out1.Price == out2.Price {
+		t.Errorf("BUG CONFIRMED: distinct on-chain prices collapsed to same float64\n"+
+			"  price1 rational: %d/%d  -> float64: %.20e\n"+
+			"  price2 rational: %d/%d  -> float64: %.20e",
+			out1.PriceN, out1.PriceD, out1.Price,
+			out2.PriceN, out2.PriceD, out2.Price)
+	} else {
+		t.Logf("prices are distinct: %.20e vs %.20e", out1.Price, out2.Price)
+	}
+}
+```
+
+### Test Output
+
+```
+=== RUN   TestOfferPriceFloat64CollidesDistinctRationals
+    data_integrity_poc_test.go:59: BUG CONFIRMED: distinct on-chain prices collapsed to same float64
+          price1 rational: 2147478646/2147478647  -> float64: 9.99999999534337602469e-01
+          price2 rational: 2147478647/2147478648  -> float64: 9.99999999534337602469e-01
+--- FAIL: TestOfferPriceFloat64CollidesDistinctRationals (0.00s)
+FAIL
+FAIL	github.com/stellar/stellar-etl/v2/internal/transform	0.812s
+```
