@@ -1,20 +1,20 @@
 {
-  "hypothesis_viable": 495,
-  "hypothesis_not_viable": 312,
-  "review_viable": 176,
-  "review_not_viable": 218,
+  "hypothesis_viable": 503,
+  "hypothesis_not_viable": 313,
+  "review_viable": 177,
+  "review_not_viable": 223,
   "poc_viable": 184,
   "poc_not_viable": 0,
   "final_review_viable": 139,
   "final_review_not_viable": 37,
   "final_review_revisions": 15,
-  "condensations": 15,
+  "condensations": 16,
   "publishes": 140,
-  "agent_failures": 1462,
+  "agent_failures": 1714,
   "agent_timeouts": 0,
-  "total_spawned": 2525,
+  "total_spawned": 2786,
   "input_tokens": 0,
-  "output_tokens": 14337722,
+  "output_tokens": 14495166,
   "cache_read_tokens": 0,
   "per_subsystem": {
     "data-integrity": {
@@ -47,9 +47,9 @@
       "final_review_revisions": 4
     },
     "data-transform": {
-      "hypothesis_viable": 130,
+      "hypothesis_viable": 135,
       "hypothesis_not_viable": 76,
-      "review_not_viable": 62,
+      "review_not_viable": 67,
       "review_viable": 44,
       "poc_viable": 49,
       "final_review_viable": 34,
@@ -67,8 +67,8 @@
       "final_review_revisions": 1
     },
     "export-pipeline": {
-      "hypothesis_viable": 92,
-      "hypothesis_not_viable": 77,
+      "hypothesis_viable": 95,
+      "hypothesis_not_viable": 78,
       "review_viable": 30,
       "review_not_viable": 32,
       "poc_viable": 31,
@@ -80,7 +80,7 @@
       "hypothesis_viable": 35,
       "hypothesis_not_viable": 18,
       "review_not_viable": 21,
-      "review_viable": 10,
+      "review_viable": 11,
       "poc_viable": 10,
       "final_review_viable": 8,
       "final_review_not_viable": 3
@@ -96,17 +96,17 @@
   },
   "per_model": {
     "gpt-5.4": {
-      "hypothesis_viable": 495,
-      "agent_failures": 1416,
+      "hypothesis_viable": 503,
+      "agent_failures": 1630,
       "final_review_viable": 139,
       "final_review_not_viable": 37,
       "final_review_revisions": 15
     },
     "claude-opus-4-6": {
-      "review_viable": 176,
+      "review_viable": 177,
       "poc_viable": 184,
-      "review_not_viable": 218,
-      "agent_failures": 45
+      "review_not_viable": 223,
+      "agent_failures": 83
     },
     "claude-sonnet-4-6": {
       "agent_failures": 1
@@ -115,12 +115,12 @@
   "tokens_by_stage": {
     "hypothesis": {
       "input": 0,
-      "output": 5767197,
+      "output": 5885607,
       "cache_read": 0
     },
     "reviewer": {
       "input": 0,
-      "output": 2962799,
+      "output": 2986868,
       "cache_read": 0
     },
     "poc": {
@@ -140,24 +140,24 @@
     },
     "condensation": {
       "input": 0,
-      "output": 180631,
+      "output": 195596,
       "cache_read": 0
     }
   },
   "tokens_by_model": {
     "gpt-5.4": {
       "input": 0,
-      "output": 8290494,
+      "output": 8408904,
       "cache_read": 0
     },
     "claude-opus-4-6": {
       "input": 0,
-      "output": 5249333,
+      "output": 5273402,
       "cache_read": 0
     },
     "claude-sonnet-4-6": {
       "input": 0,
-      "output": 797895,
+      "output": 812860,
       "cache_read": 0
     }
   },
@@ -165,186 +165,6 @@
     [
       "hypothesis",
       "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.2
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.2
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.1
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.4
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.2
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.8
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.8
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.8
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.7
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
       1.8
     ],
     [
@@ -360,562 +180,17 @@
     [
       "hypothesis",
       "gpt-5.4",
-      1.8
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.7
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.7
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
       1.9
     ],
     [
       "hypothesis",
       "gpt-5.4",
-      1.9
+      5.0
     ],
     [
       "hypothesis",
       "gpt-5.4",
-      1.8
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.8
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.2
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.8
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.8
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.2
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.8
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.7
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.8
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.7
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.7
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.7
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.8
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.7
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.7
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      4.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      4.5
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.1
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.1
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.2
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.1
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.2
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.1
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.2
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.1
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.1
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.1
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.1
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.1
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.2
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.2
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.1
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.2
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.1
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.4
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.7
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.2
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.2
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.1
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.2
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.4
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.1
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      4.4
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      4.8
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.1
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.2
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.4
+      5.3
     ],
     [
       "hypothesis",
@@ -930,37 +205,82 @@
     [
       "hypothesis",
       "gpt-5.4",
-      3.2
+      3.5
     ],
     [
       "hypothesis",
       "gpt-5.4",
-      3.3
+      3.5
     ],
     [
       "hypothesis",
       "gpt-5.4",
-      3.2
+      3.6
     ],
     [
       "hypothesis",
       "gpt-5.4",
-      3.4
+      4.1
     ],
     [
       "hypothesis",
       "gpt-5.4",
-      5.1
+      3.9
     ],
     [
       "hypothesis",
       "gpt-5.4",
-      5.5
+      3.6
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.6
     ],
     [
       "hypothesis",
       "gpt-5.4",
       3.7
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.7
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.6
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.6
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.5
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.5
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.5
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.7
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.6
     ],
     [
       "hypothesis",
@@ -975,42 +295,22 @@
     [
       "hypothesis",
       "gpt-5.4",
-      3.6
+      1.8
     ],
     [
       "hypothesis",
       "gpt-5.4",
-      3.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      3.3
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.7
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.7
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.1
+      1.2
     ],
     [
       "hypothesis",
       "gpt-5.4",
       2.0
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.1
     ],
     [
       "hypothesis",
@@ -1030,27 +330,7 @@
     [
       "hypothesis",
       "gpt-5.4",
-      1.7
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      2.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1.9
+      1.2
     ],
     [
       "hypothesis",
@@ -1065,102 +345,822 @@
     [
       "hypothesis",
       "gpt-5.4",
-      19.9
+      1.9
     ],
     [
       "hypothesis",
       "gpt-5.4",
-      3235.6
-    ],
-    [
-      "reviewer",
-      "claude-opus-4-6",
-      128.8
+      2.0
     ],
     [
       "hypothesis",
       "gpt-5.4",
-      492.0
-    ],
-    [
-      "reviewer",
-      "claude-opus-4-6",
-      87.5
-    ],
-    [
-      "reviewer",
-      "claude-opus-4-6",
-      71.6
-    ],
-    [
-      "reviewer",
-      "claude-opus-4-6",
-      183.3
+      1.4
     ],
     [
       "hypothesis",
       "gpt-5.4",
-      4916.6
-    ],
-    [
-      "reviewer",
-      "claude-opus-4-6",
-      224.4
-    ],
-    [
-      "reviewer",
-      "claude-opus-4-6",
-      125.2
-    ],
-    [
-      "reviewer",
-      "claude-opus-4-6",
-      192.6
+      1.2
     ],
     [
       "hypothesis",
       "gpt-5.4",
-      2163.9
+      1.9
     ],
     [
       "hypothesis",
       "gpt-5.4",
-      989.7
+      2.1
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.3
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.3
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.0
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.2
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.1
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      4.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      4.0
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.4
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.2
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.7
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.7
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.4
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.7
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.5
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.5
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.4
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.5
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      5.5
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      6.4
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.7
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.3
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.5
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.2
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.1
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.0
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.2
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.3
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.2
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.1
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.0
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.0
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.2
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.4
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.6
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.0
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      4.1
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.4
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.6
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      4.0
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.7
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.7
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.7
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.6
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.5
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.6
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.4
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.5
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.4
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.5
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.4
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.3
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.4
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.4
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.2
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.7
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.2
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.7
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      3.0
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.2
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.0
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.0
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.0
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.0
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.5
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.4
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.1
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.0
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.0
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      2.0
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.9
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      1.8
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      17.1
+    ],
+    [
+      "hypothesis",
+      "gpt-5.4",
+      376.5
     ],
     [
       "reviewer",
       "claude-opus-4-6",
-      279.0
+      54.7
     ],
     [
       "reviewer",
       "claude-opus-4-6",
-      258.7
+      60.8
     ],
     [
       "reviewer",
       "claude-opus-4-6",
-      213.2
+      96.5
+    ],
+    [
+      "reviewer",
+      "claude-opus-4-6",
+      81.1
+    ],
+    [
+      "condensation",
+      "claude-sonnet-4-6",
+      494.1
+    ],
+    [
+      "reviewer",
+      "claude-opus-4-6",
+      57.0
     ],
     [
       "hypothesis",
       "gpt-5.4",
-      1886.6
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1440.8
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      1323.0
-    ],
-    [
-      "hypothesis",
-      "gpt-5.4",
-      939.1
+      2073.1
     ]
   ],
   "costs": {
@@ -1169,43 +1169,43 @@
         "models": {
           "claude-opus-4-6": {
             "input_tokens": 0,
-            "output_tokens": 5249333,
+            "output_tokens": 5273402,
             "cache_read_tokens": 0,
-            "total_cost": 55.98,
-            "premium_requests": 1866
+            "total_cost": 56.52,
+            "premium_requests": 1884
           },
           "claude-sonnet-4-6": {
             "input_tokens": 0,
-            "output_tokens": 797895,
+            "output_tokens": 812860,
             "cache_read_tokens": 0,
-            "total_cost": 4.68,
-            "premium_requests": 156
+            "total_cost": 4.71,
+            "premium_requests": 157
           },
           "gpt-5.4": {
             "input_tokens": 0,
-            "output_tokens": 8290494,
+            "output_tokens": 8408904,
             "cache_read_tokens": 0,
-            "total_cost": 10.53,
-            "premium_requests": 351
+            "total_cost": 10.59,
+            "premium_requests": 353
           }
         },
-        "provider_cost": 71.19
+        "provider_cost": 71.82
       }
     },
-    "total_cost": 71.19,
+    "total_cost": 71.82,
     "stages": {
       "hypothesis": {
         "copilot": {
           "input_tokens": 0,
-          "output_tokens": 5767197,
-          "premium_requests": 141
+          "output_tokens": 5885607,
+          "premium_requests": 143
         }
       },
       "reviewer": {
         "copilot": {
           "input_tokens": 0,
-          "output_tokens": 2962799,
-          "premium_requests": 1263
+          "output_tokens": 2986868,
+          "premium_requests": 1281
         }
       },
       "poc": {
@@ -1232,8 +1232,8 @@
       "condensation": {
         "copilot": {
           "input_tokens": 0,
-          "output_tokens": 180631,
-          "premium_requests": 15
+          "output_tokens": 195596,
+          "premium_requests": 16
         }
       }
     }

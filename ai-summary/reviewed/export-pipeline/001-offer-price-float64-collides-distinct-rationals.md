@@ -1,0 +1,74 @@
+# H001: Offer-state `price` collapses distinct on-chain prices
+
+**Date**: 2026-04-15
+**Subsystem**: export-pipeline
+**Severity**: Critical
+**Impact**: Financial field produces wrong numeric value
+**Hypothesis by**: gpt-5.4, high
+
+## Expected Behavior
+
+`offers.price` should remain distinct for distinct on-chain `xdr.Price` values, so downstream consumers that read the scalar price column can distinguish adjacent offer states without having to reconstruct the rational from companion fields.
+
+## Mechanism
+
+`TransformOffer()` exports the scalar `Price` as `float64(outputPriceN) / float64(outputPriceD)`. Near `xdr.Int32` bounds, valid neighboring rationals differ by less than one `float64` ulp, so distinct prices collapse to the same IEEE-754 value even though `price_n` and `price_d` remain different. For example, `2147478646/2147478647` and `2147478647/2147478648` both export as `0.9999999995343376`.
+
+## Trigger
+
+Export two offer ledger entries whose `OfferEntry.Price` values are `2147478646/2147478647` and `2147478647/2147478648`. The resulting `offers` rows preserve different `price_n`/`price_d`, but the scalar `price` field is identical in both rows.
+
+## Target Code
+
+- `internal/transform/offer.go:49-66` — validates `Price.N` / `Price.D` and computes the scalar `outputPrice`
+- `internal/transform/offer.go:79-101` — emits `Price`, `PriceN`, and `PriceD` into `OfferOutput`
+- `cmd/export_ledger_entry_changes.go:204-212` — exports `TransformOffer()` rows directly into the live `offers` dataset
+
+## Evidence
+
+The live transform uses raw `float64` division for the scalar column instead of an exact decimal or string path. A local calculation against the production conversion showed a concrete collision: `(2147478646,2147478647)` and `(2147478647,2147478648)` both round to the same exported double even though the on-chain prices are distinct.
+
+## Anti-Evidence
+
+The exporter also preserves exact `price_n` and `price_d`, so consumers that ignore `price` can reconstruct the true rational. But `price` is still emitted as a first-class JSON/Parquet field with no warning that different on-chain prices can collapse onto the same numeric value.
+
+---
+
+## Review
+
+**Verdict**: VIABLE
+**Severity**: Low
+**Date**: 2026-04-16
+**Reviewed by**: claude-opus-4-6, high
+**Novelty**: PASS — not previously investigated (fail/046 covers DimOfferID `%f` formatting in dormant normalized-offer code, a different mechanism and code path)
+
+### Trace Summary
+
+Traced from `export_ledger_entry_changes.go:178` through `TransformOffer()` in `offer.go:63-66` where `float64(outputPriceN) / float64(outputPriceD)` computes the scalar price. Both `outputPriceN` and `outputPriceD` are `int32` (valid range [1, 2147483647]). For rationals near 1.0 with both components near int32 max, the difference between adjacent rationals (~2.17e-19) is ~1000x smaller than a float64 ULP near 1.0 (~2.22e-16), causing mathematically proven collisions. The result is stored in `OfferOutput.Price` (type `float64`) and exported to both JSON and Parquet.
+
+### Code Paths Examined
+
+- `cmd/export_ledger_entry_changes.go:173-185` — live offer export path, calls `TransformOffer()` for each offer change entry
+- `internal/transform/offer.go:49-66` — validates `Price.N > 0`, `Price.D > 0`, computes `outputPrice = float64(outputPriceN) / float64(outputPriceD)`
+- `internal/transform/offer.go:79-101` — emits `Price: outputPrice` alongside `PriceN: outputPriceN`, `PriceD: outputPriceD` in `OfferOutput`
+- `internal/transform/schema.go:261-275` — `OfferOutput.Price` is `float64`, `PriceN` is `int32`, `PriceD` is `int32`
+- `internal/transform/schema_parquet.go:194-208` — Parquet schema mirrors JSON: `Price float64`, `PriceN int32`, `PriceD int32`
+- `internal/transform/operation.go:409-419` — operations use `price.String()` → `strconv.ParseFloat()`, a different path but same float64 limitation
+
+### Findings
+
+**The collision is mathematically proven and confirmed numerically.** Two concrete int32 pairs — `(2147478646, 2147478647)` and `(2147478647, 2147478648)` — produce identical float64 values when divided. Near int32 max, consecutive rationals of the form `n/(n+1)` and `(n+1)/(n+2)` differ by ~1/n², which at n ≈ 2^31 is ~2.17e-19, far below the float64 ULP of ~2.22e-16 at magnitude 1.0.
+
+**Severity downgraded from Critical to Low** for three reasons:
+1. **Companion exact fields exist**: `price_n` (int32) and `price_d` (int32) are always emitted alongside `price` in both JSON and Parquet, preserving the exact on-chain rational.
+2. **Extreme trigger values required**: Both numerator and denominator must be near int32 max (~2 billion) for the collision to occur. On the real Stellar DEX, offer prices with both components this large are extremely unusual.
+3. **Inherent float64 limitation**: This is a well-known property of IEEE-754 representation, not a code logic error. The computation `float64(N)/float64(D)` does exactly what it says; the issue is the type choice for this field.
+
+The finding is real — the exported `price` column contains incorrect (indistinguishable) values for distinct on-chain prices — but the practical impact is limited.
+
+### PoC Guidance
+
+- **Test file**: `internal/transform/offer_test.go`
+- **Setup**: Construct two `ingest.Change` objects with `OfferEntry.Price` set to `{N: 2147478646, D: 2147478647}` and `{N: 2147478647, D: 2147478648}` respectively. Use a minimal valid `LedgerHeaderHistoryEntry`.
+- **Steps**: Call `TransformOffer()` on each change. Extract the `Price` field from each `OfferOutput`.
+- **Assertion**: Assert that `output1.PriceN != output2.PriceN` (distinct on-chain values) but `output1.Price == output2.Price` (collapsed float64 values). This demonstrates the scalar price field cannot distinguish these two distinct on-chain prices.
