@@ -33,6 +33,7 @@ func (g *GCS) UploadTo(credentialsPath, bucket, path string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open file %s: %v", path, err)
 	}
+	defer reader.Close()
 
 	ctx := context.Background()
 	client, err := storage.NewClient(ctx)
